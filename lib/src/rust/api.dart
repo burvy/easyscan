@@ -7,30 +7,97 @@ import 'frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `decode`, `encode_png`
+// These functions are ignored because they are not marked as `pub`: `decode`, `encode_jpeg_img`, `encode_png`, `load_oriented`, `rotate_quarters`, `to_filter`, `to_page_size`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `eq`, `fmt`
 
 /// Version of the Rust core, to prove the bridge is wired up.
 String coreVersion() => RustLib.instance.api.crateApiCoreVersion();
 
+/// Deprecated: use [`detect_page_file`] instead — this decodes PNG bytes,
+/// not camera JPEGs, and no EXIF handling.
 Future<PageDetection> detectPage({required List<int> image}) =>
     RustLib.instance.api.crateApiDetectPage(image: image);
 
-/// Flattens the quad (TL, TR, BR, BL) and returns a PNG.
+/// Deprecated: use [`process_page_file`] instead — returns PNG bytes.
+/// Flattens the quad (TL, TR, BR, BL).
 Future<Uint8List> warpPage({
   required List<int> image,
   required List<Corner> corners,
 }) => RustLib.instance.api.crateApiWarpPage(image: image, corners: corners);
 
+/// Deprecated: part of `process_page_file` now.
 /// Applies a filter and returns a PNG.
 Future<Uint8List> applyFilter({
   required List<int> image,
   required ScanFilter filter,
 }) => RustLib.instance.api.crateApiApplyFilter(image: image, filter: filter);
 
+/// Deprecated: use [`export_pdf_file`] instead — PNG bytes in, PDF bytes out.
 /// One PDF from ordered page images (any decodable format).
 Future<Uint8List> exportPdf({required List<Uint8List> pages}) =>
     RustLib.instance.api.crateApiExportPdf(pages: pages);
 
+/// Oriented apparent size of the image file, without decoding the pixels.
+Future<ImageSize> imageSizeFile({required String path}) =>
+    RustLib.instance.api.crateApiImageSizeFile(path: path);
+
+/// Detects the page quad in the JPEG at `src_path`.
+///
+/// The image is first EXIF-oriented, then given `rotation_quarters` extra
+/// clockwise quarter-turns; the returned corners are pixel coordinates in
+/// that same frame, so `detect_page_file(src, r).corners` are valid input
+/// for `process_page_file(src, .., r, ..)`.
+Future<PageDetection> detectPageFile({
+  required String srcPath,
+  required int rotationQuarters,
+}) => RustLib.instance.api.crateApiDetectPageFile(
+  srcPath: srcPath,
+  rotationQuarters: rotationQuarters,
+);
+
+/// One page file in, one processed JPEG file out (UI previews and full-res
+/// exports both go through this).
+///
+/// Order of operations: EXIF orientation, `rotation_quarters` clockwise
+/// quarter-turns, perspective warp with `corners` (TL, TR, BR, BL in the
+/// oriented *and* rotated frame), `filter`, downscale to fit
+/// `max_long_side` (aspect kept; `None` = full resolution), JPEG encode at
+/// `jpeg_quality`, write to `out_path`. Returns the written size.
+Future<ImageSize> processPageFile({
+  required String srcPath,
+  required List<Corner> corners,
+  required ScanFilter filter,
+  required int rotationQuarters,
+  required String outPath,
+  int? maxLongSide,
+  required int jpegQuality,
+}) => RustLib.instance.api.crateApiProcessPageFile(
+  srcPath: srcPath,
+  corners: corners,
+  filter: filter,
+  rotationQuarters: rotationQuarters,
+  outPath: outPath,
+  maxLongSide: maxLongSide,
+  jpegQuality: jpegQuality,
+);
+
+/// One PDF from ordered page-image paths, written to `out_path`.
+/// Each page is EXIF-oriented before embedding (rotation is baked into how
+/// the page model works — no quarter-turns here).
+Future<void> exportPdfFile({
+  required List<String> pages,
+  required String outPath,
+  required PdfPageSize pageSize,
+  required int jpegQuality,
+}) => RustLib.instance.api.crateApiExportPdfFile(
+  pages: pages,
+  outPath: outPath,
+  pageSize: pageSize,
+  jpegQuality: jpegQuality,
+);
+
+/// A corner in pixel coordinates (any coordinate frame is fine; callers
+/// document which one). Not part of the old byte API.
 class Corner {
   final double x;
   final double y;
@@ -47,6 +114,25 @@ class Corner {
           runtimeType == other.runtimeType &&
           x == other.x &&
           y == other.y;
+}
+
+/// Oriented width/height in pixels.
+class ImageSize {
+  final int width;
+  final int height;
+
+  const ImageSize({required this.width, required this.height});
+
+  @override
+  int get hashCode => width.hashCode ^ height.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ImageSize &&
+          runtimeType == other.runtimeType &&
+          width == other.width &&
+          height == other.height;
 }
 
 class PageDetection {
@@ -72,6 +158,17 @@ class PageDetection {
           corners == other.corners &&
           found == other.found &&
           confidence == other.confidence;
+}
+
+enum PdfPageSize {
+  /// Page = image size at the export dpi.
+  fitToImage,
+
+  /// A4, landscape when the image is wider than it is tall.
+  a4,
+
+  /// US Letter, landscape when the image is wider than it is tall.
+  letter,
 }
 
 enum ScanFilter { original, grayscale, enhance, blackWhite }
