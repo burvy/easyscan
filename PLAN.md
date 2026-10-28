@@ -17,7 +17,7 @@
 ## Focus now: G3b polish from burvy's first real scan
 - 016 swipe page row: delete/retake (Haiku), then 020 obvious New scan (Haiku)
 - 017 last-shot thumbnail + count while scanning: done
-- 018 swipe between pages in viewer + crop (Sonnet), then 019 filter apply-to-all + default: done
+- 018 swipe between pages in viewer + crop: done, then 019 filter apply-to-all + default: done
 
 ## Next groups
 - G3c: 021 past scans you can reopen and edit; 022 draw on pages (pen + cover/white-out) to change answers. Design agreed before coding.
