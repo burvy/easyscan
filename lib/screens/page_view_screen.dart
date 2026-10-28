@@ -11,16 +11,19 @@ import 'crop_screen.dart';
 /// this size, so the result is sharp enough to judge focus at pinch zoom.
 const _resultLongSide = 2000;
 
+/// What the viewer did to the page, handed back to whoever opened it.
+enum PageChange { retook, deleted }
+
 /// One page, large: the processed result (zoomable) or the original photo
-/// (zoomable), with Retake, Crop & filter and Delete underneath. Pops with
-/// `true` if the photo was replaced, so the caller can reopen the crop view
-/// on the new photo.
+/// (zoomable), with Retake, Crop & filter and Delete underneath. Pops with a
+/// [PageChange] when the page was retaken or deleted, so the caller can react.
 class PageViewScreen extends StatefulWidget {
   const PageViewScreen({
     super.key,
     required this.session,
     required this.pageId,
     this.showOriginal = false,
+    this.openedFromCrop = false,
   });
 
   final ScanSession session;
@@ -29,6 +32,10 @@ class PageViewScreen extends StatefulWidget {
   /// Start on the original photo instead of the processed result.
   final bool showOriginal;
 
+  /// Opened from the crop screen, which is already showing this page. Crop &
+  /// filter then just goes back to it instead of stacking a second crop screen.
+  final bool openedFromCrop;
+
   @override
   State<PageViewScreen> createState() => _PageViewScreenState();
 }
@@ -36,8 +43,9 @@ class PageViewScreen extends StatefulWidget {
 class _PageViewScreenState extends State<PageViewScreen> {
   late bool _original = widget.showOriginal;
   late Future<String> _result = _renderResult();
-  String? _resultPath;
-  int _rev = 0;
+  // Every render this screen made. Kept until dispose: an older one can still
+  // be on screen while a newer one is being drawn.
+  final List<String> _rendered = [];
 
   /// Result from the working copy with the page's current crop, filter and
   /// rotation. Rendered again whenever those may have changed.
@@ -45,8 +53,7 @@ class _PageViewScreenState extends State<PageViewScreen> {
     await widget.session.whenPrepared(widget.pageId);
     final page = widget.session.pageById(widget.pageId);
     if (page == null) throw StateError('page was deleted');
-    final out = widget.session.scratchPath('${page.id}_view${++_rev}.jpg');
-    final stale = _resultPath;
+    final out = widget.session.scratchPath('${page.id}_view${DateTime.now().microsecondsSinceEpoch}.jpg');
     await bridge.processPageFile(
       srcPath: page.workingPath!,
       corners: toBridgeCorners(page.effectiveWorkingCorners!),
@@ -56,8 +63,7 @@ class _PageViewScreenState extends State<PageViewScreen> {
       maxLongSide: _resultLongSide,
       jpegQuality: 92,
     );
-    _resultPath = out;
-    if (stale != null) _evictAndDelete(stale);
+    _rendered.add(out);
     return out;
   }
 
@@ -80,13 +86,18 @@ class _PageViewScreenState extends State<PageViewScreen> {
     if (!mounted) return;
     final after = widget.session.pageById(widget.pageId);
     if (after != null && after.originalPath != before.originalPath) {
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(PageChange.retook);
     }
   }
 
   /// The crop screen may change crop, filter or rotation, so the result is
   /// rendered again when it closes.
   Future<void> _cropAndFilter() async {
+    if (widget.openedFromCrop) {
+      // The crop screen underneath is this page's editor already.
+      Navigator.of(context).pop();
+      return;
+    }
     await Navigator.of(context).push<void>(MaterialPageRoute(
       builder: (_) => CropScreen(session: widget.session, pageId: widget.pageId),
     ));
@@ -112,14 +123,15 @@ class _PageViewScreenState extends State<PageViewScreen> {
     // Take the page out before leaving so nothing still shows it, then delete
     // its files once this screen is gone.
     final page = widget.session.remove(index);
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(PageChange.deleted);
     widget.session.discard(page);
   }
 
   @override
   void dispose() {
-    final path = _resultPath;
-    if (path != null) _evictAndDelete(path);
+    for (final path in _rendered) {
+      _evictAndDelete(path);
+    }
     super.dispose();
   }
 

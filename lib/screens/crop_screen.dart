@@ -145,15 +145,27 @@ class _CropScreenState extends State<CropScreen> {
   }
 
   /// Opens the full photo. If it is retaken there, this crop view is replaced
-  /// by a fresh one so auto-detect runs on the new photo.
+  /// by a fresh one so auto-detect runs on the new photo. If it is deleted
+  /// there, this crop view closes too.
   Future<void> _openPhoto() async {
-    final retook = await Navigator.of(context).push<bool>(MaterialPageRoute(
-      builder: (_) => PageViewScreen(session: widget.session, pageId: widget.pageId, showOriginal: true),
+    final change = await Navigator.of(context).push<PageChange>(MaterialPageRoute(
+      builder: (_) => PageViewScreen(
+        session: widget.session,
+        pageId: widget.pageId,
+        showOriginal: true,
+        openedFromCrop: true,
+      ),
     ));
-    if (retook == true && mounted) {
-      Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
-        builder: (_) => CropScreen(session: widget.session, pageId: widget.pageId),
-      ));
+    if (!mounted) return;
+    switch (change) {
+      case PageChange.retook:
+        Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
+          builder: (_) => CropScreen(session: widget.session, pageId: widget.pageId),
+        ));
+      case PageChange.deleted:
+        Navigator.of(context).pop();
+      case null:
+        break;
     }
   }
 
