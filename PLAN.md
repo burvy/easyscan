@@ -23,6 +23,6 @@
 - 023 AdMob banner + UMP consent with test IDs (OpenCode2)
 
 ## Next groups
-- G3c: 021 past scans you can reopen and edit; 022 draw on pages (pen + cover/white-out) to change answers. Design agreed before coding.
+- G3c: 021 past scans DONE; 024 test fix DONE; 022 draw on pages (pen + white-out), in progress (OpenCode); 025 orphan-file sweep (proposed, cheap).
 - G4 ads: single AdMob banner + UMP consent (13+ audience).
 - G5 release: app icon/name, signing, privacy policy, Play Console walkthrough with burvy.
