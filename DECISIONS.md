@@ -21,3 +21,4 @@ One line per decision, with the reason.
 - 2026-10-28 Scan history: every scan auto-kept in scans/<id>/ (own state.json), no auto-eviction (size shown, manual delete), New scan without confirm. Working copies dropped on switch, rebuilt keeping corners. (021 design, Sonnet)
 - 2026-10-28 Drawing: strokes stored normalized to the result page in state.json; burned in by Rust at render time (unannotated pages keep JPEG passthrough); white-out colour sampled from nearby paper; recrop moves strokes with the paper (homography). (022 design, OpenCode)
 - 022: strokes burn in BEFORE the filter (warp -> draw -> filter), so the B&W filter treats pen as ink and white-out as paper; the editor preview may differ until Done re-renders.
+- 022 ask 018: burvy chose A, so under B&W the pen is black only, with a hint (task 027). Burn-in order unchanged.
