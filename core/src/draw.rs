@@ -42,10 +42,6 @@ pub struct Stroke {
 /// Width of the alpha ramp on each side of the line, in pixels.
 const EDGE_SOFTNESS_PX: f64 = 1.5;
 
-/// Stamp spacing along the path, in pixel space (width only adds more
-/// overlapping stamps onto the same coverage mask; spacing stays fine).
-const STEP_PX: f64 = 0.5;
-
 impl Stroke {
     /// Malformed data (not enough points, non-finite values) is dropped
     /// rather than trusted, mirroring the lenient JSON parser on the Dart
@@ -74,25 +70,28 @@ pub fn apply(img: &DynamicImage, strokes: &[Stroke]) -> DynamicImage {
         return DynamicImage::ImageRgb8(buf);
     }
     let (w, h) = (buf.width() as f64, buf.height() as f64);
-    // Union coverage for one stroke at a time: stamps blend into the mask
-    // with the over operator, so overlapping disc edges accumulate to the
-    // true union instead of darkening where they overlap.
-    let mut mask = vec![0u8; buf.width() as usize * buf.height() as usize];
     for s in &strokes {
-        stamp_stroke(&mut buf, &mut mask, s, w, h);
+        stamp_stroke(&mut buf, s, w, h);
     }
     DynamicImage::ImageRgb8(buf)
 }
 
-/// Stamps one stroke into `buf`, using `mask` as the scratch coverage map
-/// (cleared here; only pixels of the stroke's touched box are read back).
-fn stamp_stroke(buf: &mut RgbImage, mask: &mut [u8], s: &Stroke, w: f64, h: f64) {
+/// Paints one stroke into `buf`.
+///
+/// The stroke's ink footprint is the union of capsules (segments thickened
+/// by `radius` discs), so each pixel's coverage is computed directly as the
+/// signed distance to the *nearest* segment — a perfect `max()` union with
+/// no stamp spacing and no per-disc accumulation. Work is bounded by the
+/// stroke's own bounding box: one scratch mask of that box, one capsule
+/// raster per segment, one blend pass.
+fn stamp_stroke(buf: &mut RgbImage, s: &Stroke, w: f64, h: f64) {
     let (iw, ih) = (buf.width(), buf.height());
     let min_side = w.min(h);
     let radius = (s.width * min_side / 2.0)
         .abs()
         .max(0.5)
         .min(min_side / 4.0);
+    let reach = radius + EDGE_SOFTNESS_PX;
     let points: Vec<(f64, f64)> = s
         .points
         .as_chunks::<2>()
@@ -101,51 +100,71 @@ fn stamp_stroke(buf: &mut RgbImage, mask: &mut [u8], s: &Stroke, w: f64, h: f64)
         .map(|&[x, y]| (x * w, y * h))
         .collect();
 
-    mask[..iw as usize * ih as usize].fill(0);
-    let mut touched: Option<(u32, u32, u32, u32)> = None; // x0, y0, x1, y1
+    // Bounding box of the whole polyline, clamped to the image.
+    let mut xmin = f64::INFINITY;
+    let mut ymin = f64::INFINITY;
+    let mut xmax = f64::NEG_INFINITY;
+    let mut ymax = f64::NEG_INFINITY;
+    for &(x, y) in &points {
+        xmin = xmin.min(x);
+        ymin = ymin.min(y);
+        xmax = xmax.max(x);
+        ymax = ymax.max(y);
+    }
+    let bx0 = (xmin - reach).floor().max(0.0) as u32;
+    let by0 = (ymin - reach).floor().max(0.0) as u32;
+    let bx1 = (xmax + reach).ceil().min(iw as f64) as u32;
+    let by1 = (ymax + reach).ceil().min(ih as f64) as u32;
+    if bx0 >= bx1 || by0 >= by1 {
+        return; // entirely outside the frame
+    }
+    let bw = (bx1 - bx0) as usize;
+    let bh = (by1 - by0) as usize;
+    let mut mask = vec![0u8; bw * bh];
 
-    // Walk the polyline, stamping a soft-edged disc every half pixel.
+    // Per-segment capsule raster, unioned by max.
     for seg in points.windows(2) {
         let (px, py) = seg[0];
         let (qx, qy) = seg[1];
-        let steps = (((qx - px).hypot(qy - py)) / STEP_PX) as u32 + 1;
-        for i in 0..=steps {
-            let t = i as f64 / steps as f64;
-            let (cx, cy) = (px + (qx - px) * t, py + (qy - py) * t);
-            // Bounding box of influenced pixels, clamped to the image.
-            let x0 = (cx - radius - EDGE_SOFTNESS_PX).floor().max(0.0) as u32;
-            let y0 = (cy - radius - EDGE_SOFTNESS_PX).floor().max(0.0) as u32;
-            let x1 = (cx + radius + EDGE_SOFTNESS_PX).ceil().min(iw as f64) as u32;
-            let y1 = (cy + radius + EDGE_SOFTNESS_PX).ceil().min(ih as f64) as u32;
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let dx = x as f64 + 0.5 - cx;
-                    let dy = y as f64 + 0.5 - cy;
-                    let a = ((radius - dx.hypot(dy)) / EDGE_SOFTNESS_PX).clamp(0.0, 1.0);
-                    if a <= 0.0 {
-                        continue;
-                    }
-                    let idx = (y * iw + x) as usize;
-                    // Accumulate coverage: c' = a + c * (1 - a).
-                    let cur = mask[idx] as f64 / 255.0;
-                    let merged = a + cur * (1.0 - a);
-                    mask[idx] = (merged * 255.0 + 0.5) as u8;
-                    touched = Some(match touched {
-                        None => (x, y, x, y),
-                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
-                    });
+        let dx = qx - px;
+        let dy = qy - py;
+        let len2 = dx * dx + dy * dy;
+        // Segment-local box, clamped to the stroke bbox.
+        let sx0 = ((px.min(qx) - reach).floor().max(bx0 as f64)) as u32;
+        let sy0 = ((py.min(qy) - reach).floor().max(by0 as f64)) as u32;
+        let sx1 = ((px.max(qx) + reach).ceil().min(bx1 as f64)) as u32;
+        let sy1 = ((py.max(qy) + reach).ceil().min(by1 as f64)) as u32;
+        for y in sy0..sy1 {
+            for x in sx0..sx1 {
+                let dxp = x as f64 + 0.5 - px;
+                let dyp = y as f64 + 0.5 - py;
+                // Distance to the segment (a disc at the endpoint when the
+                // segment is degenerate); the endpoint clamp is what makes
+                // the round caps for free.
+                let d = if len2 == 0.0 {
+                    dxp.hypot(dyp)
+                } else {
+                    let t = ((dxp * dx + dyp * dy) / len2).clamp(0.0, 1.0);
+                    (dxp - t * dx).hypot(dyp - t * dy)
+                };
+                let a = ((radius - d) / EDGE_SOFTNESS_PX).clamp(0.0, 1.0);
+                if a <= 0.0 {
+                    continue;
+                }
+                let i = (y - by0) as usize * bw + (x - bx0) as usize;
+                let ai = (a * 255.0 + 0.5) as u8;
+                // The union of discs is a max, not an over-blend.
+                if ai > mask[i] {
+                    mask[i] = ai;
                 }
             }
         }
     }
 
-    let Some((x0, y0, x1, y1)) = touched else {
-        return; // entirely outside the frame
-    };
     let [cr, cg, cb] = s.color;
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let m = mask[(y * iw + x) as usize];
+    for y in by0..by1 {
+        for x in bx0..bx1 {
+            let m = mask[(y - by0) as usize * bw + (x - bx0) as usize];
             if m == 0 {
                 continue;
             }
@@ -289,5 +308,76 @@ mod tests {
         // The stamping itself clamps; the visible row is inked across.
         assert_eq!(pixel(&out, 2, 20), [10, 20, 30]);
         assert_eq!(pixel(&out, 37, 20), [10, 20, 30]);
+    }
+
+    #[test]
+    fn overlapping_segments_union_as_max_not_over() {
+        // A stroke whose last segment duplicates the previous one paints the
+        // same pixels twice. Coverage must be the union (max), so an edge
+        // pixel hit by both keeps the single-disc alpha ramp instead of
+        // saturating toward opaque under the (wrong) over operator.
+        //
+        // Geometry: 200x100 frame, radius 10, line (50,50)-(150,50). Edge
+        // pixel (100, 59): its centre is 9.5px off the line, deep in the
+        // 1.5px soft ramp — alpha = (10-9.5)/1.5 = 1/3 -> 85/255.
+        let img = white(200, 100);
+        let once = pen(0.2, &[0.25, 0.5, 0.75, 0.5]);
+        let edge = pixel(&apply(&img, &[once]), 100, 59);
+        let expected = pen(0.2, &[0.25, 0.5, 0.75, 0.5, 0.75, 0.5]);
+        let repainted = pixel(&apply(&img, &[expected]), 100, 59);
+        assert_eq!(
+            edge, repainted,
+            "re-inking the same pixels must not darken them"
+        );
+        // (10*85 + 255*(255-85))/255 + 0.5 ≈ 173
+        assert_eq!(edge, [173, 177, 180], "alpha is the single-disc ramp");
+    }
+
+    #[test]
+    fn a_fan_of_half_pixel_stamp_lines_does_not_saturate() {
+        // The stamp-spacing failure mode Claude flagged: an edge pixel hit
+        // by many partial coverages half a pixel apart would saturate toward
+        // opaque under the over operator. With the union (max) it keeps the
+        // ramp value of its *nearest* capsule.
+        //
+        // Geometry: 200x100 frame, radius 10, four parallel lines at y = 50,
+        // 51, 52, 53 (1px apart). Pixel (100, 62): nearest line is y=53 at
+        // d=9.5 -> alpha (10-9.5)/1.5 = 1/3 -> 85/255, exactly like the
+        // single-line edge pixel above. Over-blending 4 stamps of a=1/3
+        // would land near 200/255 (r≈40); max-union keeps r=173.
+        let img = white(200, 100);
+        let stroke = pen(
+            0.2,
+            &[
+                0.25, 0.50, 0.75, 0.50, //
+                0.25, 0.51, 0.75, 0.51, //
+                0.25, 0.52, 0.75, 0.52, //
+                0.25, 0.53, 0.75, 0.53,
+            ],
+        );
+        let edge = pixel(&apply(&img, &[stroke]), 100, 62);
+        assert_eq!(edge, [173, 177, 180], "ramp value of the nearest capsule");
+    }
+
+    #[test]
+    #[ignore] // perf check: run with --ignored --nocapture
+    fn timing_thick_strokes_on_12mp() {
+        // 4000x3000 (12MP), 20 thick pen strokes zig-zagging across the page.
+        let img = DynamicImage::new_rgb8(4000, 3000);
+        let mut strokes = Vec::new();
+        for i in 0..20 {
+            let y = (i as f64 + 0.5) / 20.0;
+            strokes.push(pen(0.05, &[0.05, y, 0.5, y + 0.2, 0.95, y]));
+        }
+        strokes.push(Stroke {
+            tool: Tool::Whiteout,
+            color: [250, 245, 235],
+            width: 0.3,
+            points: vec![0.1, 0.4, 0.9, 0.6],
+        });
+        let t = std::time::Instant::now();
+        let out = apply(&img, &strokes);
+        eprintln!("20 thick strokes over 12MP: {:?}", t.elapsed());
+        assert_eq!(out.width(), 4000);
     }
 }
