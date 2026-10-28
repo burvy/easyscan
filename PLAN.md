@@ -9,8 +9,8 @@
 - G4 ads groundwork: 023 AdMob banner + UMP consent (test IDs; fixed 320x50 banner on the page list).
 
 ## Focus now: G5 release prep
-- 028 app icon (page with corner fold; burvy approves) - Sonnet2.
-- 029 release signing (upload key owned by burvy, key.properties gitignored) + first release build on the phone - Sonnet.
-- 030 privacy policy on GitHub Pages (docs/) + Data safety answers - Sonnet, after 029.
-- 031 real AdMob app + banner IDs - blocked on burvy sending the IDs (ask 020).
-- Then: Play Console walkthrough with burvy (closed test 12 testers x 14 days if personal account, content rating 13+, ads declaration, store listing + screenshots).
+- Done: 028 icon (orange), 029 release signing + R8 fix, release smoke-tested on the Pixel; 030 privacy policy (live on Pages) + Data safety answers; 031 real AdMob IDs; app-ads.txt live at burvy.github.io.
+- 033 store listing text + feature graphic - Freebuff.
+- burvy: AdMob account approval (wait), UMP consent message in AdMob, make the upload key (docs/RELEASE.md).
+- Then: screenshots on the phone, Play Console walkthrough (app setup, Data safety, content rating 13+, ads declaration, closed test 12 testers x 14 days - personal account).
+- 032 (proposed): orange in-app theme to match the icon - ask burvy.
