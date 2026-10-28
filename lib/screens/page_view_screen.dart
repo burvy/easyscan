@@ -126,7 +126,9 @@ class _PageViewScreenState extends State<PageViewScreen> {
       builder: (_) => CropScreen(session: widget.session, pageId: _pageId, onPageChanged: (id) => _pageId = id),
     ));
     if (!mounted) return;
-    setState(() => _result = _renderResult());
+    setState(() {
+      _result = _renderResult();
+    });
   }
 
   Future<void> _annotate() async {
@@ -134,7 +136,9 @@ class _PageViewScreenState extends State<PageViewScreen> {
       builder: (_) => AnnotateScreen(session: widget.session, pageId: _pageId),
     ));
     if (!mounted) return;
-    setState(() => _result = _renderResult());
+    setState(() {
+      _result = _renderResult();
+    });
   }
 
   Future<void> _delete() async {

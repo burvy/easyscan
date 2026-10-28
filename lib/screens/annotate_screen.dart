@@ -37,7 +37,7 @@ class AnnotateScreen extends StatefulWidget {
 
 class _AnnotateScreenState extends State<AnnotateScreen> {
   late final List<Stroke> _strokes = List.of(widget.session.pageById(widget.pageId)?.strokes ?? const []);
-  late final List<Stroke> _initial = List.of(_strokes);
+  late final List<Stroke> _initial;
   final List<Stroke> _redo = [];
 
   StrokeTool _tool = StrokeTool.pen;
@@ -69,6 +69,7 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
   @override
   void initState() {
     super.initState();
+    _initial = List.of(_strokes);
     _render();
   }
 
@@ -407,7 +408,9 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
         );
       });
 
-  Widget _toolbar() => SafeArea(
+  Widget _toolbar() => ColoredBox(
+        color: Theme.of(context).colorScheme.surface,
+        child: SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
@@ -429,6 +432,7 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
             ]),
           ]),
         ),
+        ),
       );
 
   Widget _colorDot(int i) => GestureDetector(
@@ -439,7 +443,7 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
           decoration: BoxDecoration(
             color: Color(_penColors[i]),
             shape: BoxShape.circle,
-            border: Border.all(color: i == _colorIndex ? Colors.white : Colors.white24, width: i == _colorIndex ? 3 : 1),
+            border: Border.all(color: i == _colorIndex ? Colors.black87 : Colors.black26, width: i == _colorIndex ? 3 : 1),
           ),
         ),
       );
@@ -454,12 +458,12 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: selected ? Colors.white : Colors.white24, width: selected ? 3 : 1),
+          border: Border.all(color: selected ? Colors.black87 : Colors.black26, width: selected ? 3 : 1),
         ),
         child: Container(
           width: 6.0 + i * 6,
           height: 6.0 + i * 6,
-          decoration: const BoxDecoration(color: Colors.white70, shape: BoxShape.circle),
+          decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
         ),
       ),
     );
