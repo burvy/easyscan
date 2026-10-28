@@ -17,9 +17,11 @@ pub enum PageSize {
     /// Page = image size at the export DPI. Round trip: an image printed at
     /// [`PdfOptions::dpi`] comes out exactly as scanned, no padding.
     FitToImage,
-    /// A4 portrait (210 × 297 mm). Image scaled to fit, aspect kept, centred.
+    /// A4 (portrait by default; landscape when the image is wider than it
+    /// is tall). Image scaled to fit, aspect kept, centred.
     A4,
-    /// US Letter portrait (8.5 × 11 in). Image scaled to fit, aspect kept, centred.
+    /// US Letter (portrait by default; landscape when the image is wider
+    /// than it is tall). Image scaled to fit, aspect kept, centred.
     Letter,
 }
 
@@ -47,11 +49,15 @@ impl Default for PdfOptions {
 
 /// Stateless: ordered pages in, one PDF out as bytes.
 ///
+/// Precondition: `pages` is non-empty — the app never exports zero pages,
+/// and some viewers reject a 0-page PDF.
+///
 /// Builds a minimal PDF: catalog, page tree, and per page a JPEG image
 /// XObject plus a content stream that draws it. Objects get strictly
 /// increasing numbers, and their byte offsets are recorded as they are
 /// written so the xref table at the end is exact.
 pub fn export_pdf(pages: &[DynamicImage], options: &PdfOptions) -> Vec<u8> {
+    debug_assert!(!pages.is_empty(), "export of an empty scan produces a PDF most viewers reject");
     let mut buf = Vec::new();
 
     // Binary marker so viewers treat the rest as bytes, not latin-1 text.
@@ -97,9 +103,10 @@ pub fn export_pdf(pages: &[DynamicImage], options: &PdfOptions) -> Vec<u8> {
         buf.extend_from_slice(page_obj.as_bytes());
 
         // The image maps to the unit square, so this cm is the entire
-        // scaling/aspect handling: place (x, y), scale to (w, h).
+        // scaling/aspect handling: place (x, y), scale to (w, h). The q/Q
+        // pair keeps the stream balanced for strict viewers and preflight.
         start_object(&mut buf, &mut offsets, content_num);
-        let cmd = format!("{:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n", w, h, x, y, i + 1);
+        let cmd = format!("q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n", w, h, x, y, i + 1);
         let content = format!("<< /Length {} >>\nstream\n{}\nendstream\nendobj\n", cmd.len(), cmd);
         buf.extend_from_slice(content.as_bytes());
 
@@ -163,14 +170,32 @@ fn encode_jpeg(page: &DynamicImage, quality: u8) -> (Vec<u8>, &'static str) {
     (jpeg, colorspace)
 }
 
+/// A4 portrait size in points; see [`orient`] for landscape.
+const A4: (f64, f64) = (595.28, 841.89);
+/// US Letter portrait size in points; see [`orient`] for landscape.
+const LETTER: (f64, f64) = (612.0, 792.0);
+
 /// Page media box in points, then the rectangle (x, y, w, h) where the page
-/// image is drawn — scaled to fit, aspect kept, centred on A4/Letter.
+/// image is drawn — scaled to fit, aspect kept, centred.
 fn layout(options: &PdfOptions, w_px: u32, h_px: u32) -> ((f64, f64), (f64, f64, f64, f64)) {
-    let points = (w_px as f64 * 72.0 / options.dpi as f64, h_px as f64 * 72.0 / options.dpi as f64);
+    // dpi 0 would make infinite/NaN points; clamp instead of failing an export.
+    let dpi = options.dpi.max(1) as f64;
+    let image = (w_px as f64 * 72.0 / dpi, h_px as f64 * 72.0 / dpi);
     match options.page_size {
-        PageSize::FitToImage => (points, (0.0, 0.0, points.0, points.1)),
-        PageSize::A4 => fit_in((595.28, 841.89), points),
-        PageSize::Letter => fit_in((612.0, 792.0), points),
+        PageSize::FitToImage => (image, (0.0, 0.0, image.0, image.1)),
+        PageSize::A4 => fit_in(orient(A4, image), image),
+        PageSize::Letter => fit_in(orient(LETTER, image), image),
+    }
+}
+
+/// Landscape page box when the page image is wider than it is tall, so a
+/// landscape worksheet fills the page (the page itself stays unrotated —
+/// no /Rotate).
+fn orient(page: (f64, f64), image: (f64, f64)) -> (f64, f64) {
+    if image.0 > image.1 {
+        (page.1, page.0)
+    } else {
+        page
     }
 }
 
@@ -293,14 +318,61 @@ mod tests {
 
     #[test]
     fn fixed_page_sizes_keep_aspect() {
-        // A wide 2:1 image on Letter (612 × 792): width binds, so the image
-        // draws at 612 × 306, vertically centred.
+        // A wide 2:1 image on Letter: the page turns landscape (792 × 612)
+        // so the worksheet fills it; width binds at scale 792/400 = 1.98.
         let wide = DynamicImage::ImageRgb8(RgbImage::new(400, 200));
         let options = PdfOptions { page_size: PageSize::Letter, ..Default::default() };
         let pdf = export_pdf(&[wide], &options);
         let s = String::from_utf8_lossy(&pdf);
+        assert!(s.contains("/MediaBox [0 0 792.00 612.00]"), "{s}");
+        assert!(s.contains("q 792.00 0 0 396.00 0.00 108.00 cm"), "{s}");
+
+        // And a tall 1:2 image stays on portrait Letter (612 × 792).
+        let tall = DynamicImage::ImageRgb8(RgbImage::new(200, 400));
+        let pdf = export_pdf(&[tall], &options);
+        let s = String::from_utf8_lossy(&pdf);
         assert!(s.contains("/MediaBox [0 0 612.00 792.00]"), "{s}");
-        assert!(s.contains("612.00 0 0 306.00 0.00 243.00 cm"), "{s}");
+        assert!(s.contains("q 396.00 0 0 792.00 108.00 0.00 cm"), "{s}");
+    }
+
+    /// Every content stream must be balanced: it starts with `q`, and the
+    /// only other streams are JPEGs (SOI marker).
+    #[test]
+    fn content_streams_start_with_q() {
+        let pdf = export_pdf(
+            &[gray_page(1), color_page(1), gray_page(2)],
+            &PdfOptions::default(),
+        );
+        let mut content_streams = 0;
+        let mut at = 0;
+        // Streams open on their own line: "\nstream\n". That never matches
+        // inside "endstream\n" (preceded by the 'd').
+        while let Some(found) = pdf[at..]
+            .windows(b"\nstream\n".len())
+            .position(|w| w == *b"\nstream\n")
+            .map(|p| p + at)
+        {
+            at = found + "\nstream\n".len();
+            let body = &pdf[at..];
+            assert!(
+                body.starts_with(b"q ") || body.starts_with(&[0xFF, 0xD8]),
+                "stream must be a q-paired content stream or a JPEG: {:?}",
+                &body[..20.min(body.len())]
+            );
+            content_streams += usize::from(body.starts_with(b"q "));
+        }
+        assert_eq!(content_streams, 3);
+    }
+
+    /// dpi 0 would put inf/NaN in the MediaBox; it must never leak through.
+    #[test]
+    fn zero_dpi_is_clamped_not_nan() {
+        let options = PdfOptions { dpi: 0, ..Default::default() };
+        let pdf = export_pdf(&[gray_page(1)], &options);
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(!s.contains("NaN") && !s.contains("inf"), "{s} contains a non-finite number");
+        // dpi clamps to 1: a 410 px page → 410 × 72 = 29520 pt.
+        assert!(s.contains("/MediaBox [0 0 29520.00 29520.00]"), "unexpected mediabox, dpi not clamped");
     }
 
     /// Writes target/sample.pdf (workspace target dir) from 3 generated
