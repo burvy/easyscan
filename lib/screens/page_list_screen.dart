@@ -7,10 +7,10 @@ import '../state/scan_session.dart';
 import 'camera_screen.dart';
 import 'crop_screen.dart';
 import 'export_dialog.dart';
+import 'page_view_screen.dart';
 
-/// Home screen: the pages of the current scan, drag to reorder, tap for
-/// actions. Tasks 010 (crop/filter) and 011 (export) hook in at the marked
-/// placeholders.
+/// Home screen: the pages of the current scan, drag to reorder. Tap a page to
+/// see its result large; long-press for Retake, Crop & filter and Delete.
 class PageListScreen extends StatelessWidget {
   const PageListScreen({super.key, required this.session});
 
@@ -35,6 +35,12 @@ class PageListScreen extends StatelessWidget {
         .then((reason) {
       if (reason != SnackBarClosedReason.action) session.discard(page);
     });
+  }
+
+  void _openPage(BuildContext context, int index) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PageViewScreen(session: session, pageId: session.pages[index].id),
+    ));
   }
 
   void _showActions(BuildContext context, int index) {
@@ -100,7 +106,8 @@ class PageListScreen extends StatelessWidget {
                       key: ValueKey(pages[i].id),
                       page: pages[i],
                       index: i,
-                      onTap: () => _showActions(context, i),
+                      onTap: () => _openPage(context, i),
+                      onLongPress: () => _showActions(context, i),
                     ),
                   ),
             floatingActionButton: FloatingActionButton.extended(
@@ -114,15 +121,23 @@ class PageListScreen extends StatelessWidget {
 }
 
 class _PageTile extends StatelessWidget {
-  const _PageTile({super.key, required this.page, required this.index, required this.onTap});
+  const _PageTile({
+    super.key,
+    required this.page,
+    required this.index,
+    required this.onTap,
+    required this.onLongPress,
+  });
 
   final ScanPage page;
   final int index;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) => ListTile(
         onTap: onTap,
+        onLongPress: onLongPress,
         leading: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: SizedBox(

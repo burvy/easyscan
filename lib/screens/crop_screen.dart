@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../models/scan_page.dart';
 import '../src/rust/api.dart' as bridge;
 import '../state/scan_session.dart';
+import 'page_view_screen.dart';
 
 const _previewLongSide = 1200;
 const _filterLabels = {
@@ -36,6 +37,8 @@ class _CropScreenState extends State<CropScreen> {
   late PageFilter _filter;
   late int _rotation;
   late final List<Offset> _initialCorners;
+  // The photo this screen opened on; if it has been retaken, edits are stale.
+  String? _openedPhoto;
 
   bool _previewing = false;
   bool _previewDirty = true;
@@ -48,6 +51,7 @@ class _CropScreenState extends State<CropScreen> {
     if (_loaded) return;
     _loaded = true;
     _page = widget.session.pageById(widget.pageId)!;
+    _openedPhoto = _page.originalPath;
     _corners = List.of(_page.corners!);
     _initialCorners = List.of(_corners);
     _filter = _page.filter;
@@ -140,14 +144,31 @@ class _CropScreenState extends State<CropScreen> {
     _render();
   }
 
+  /// Opens the full photo. If it is retaken there, this crop view is replaced
+  /// by a fresh one so auto-detect runs on the new photo.
+  Future<void> _openPhoto() async {
+    final retook = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PageViewScreen(session: widget.session, pageId: widget.pageId, showOriginal: true),
+    ));
+    if (retook == true && mounted) {
+      Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
+        builder: (_) => CropScreen(session: widget.session, pageId: widget.pageId),
+      ));
+    }
+  }
+
   void _commit() {
+    // A retaken page has new corners of its own; do not write these over them.
+    final retaken = widget.session.pageById(widget.pageId)?.originalPath != _openedPhoto;
     // Crossed handles would warp to garbage, so keep the last good crop.
-    widget.session.setEdits(
-      _page.id,
-      corners: _cropValid ? _corners : _initialCorners,
-      filter: _filter,
-      rotationQuarterTurns: _rotation,
-    );
+    if (!retaken) {
+      widget.session.setEdits(
+        _page.id,
+        corners: _cropValid ? _corners : _initialCorners,
+        filter: _filter,
+        rotationQuarterTurns: _rotation,
+      );
+    }
     _renderSeq++;
     if (_previewPath != null) {
       FileImage(File(_previewPath!)).evict();
@@ -192,7 +213,14 @@ class _CropScreenState extends State<CropScreen> {
         child: Scaffold(
           appBar: AppBar(
             title: const Text('Crop & filter'),
-            actions: [TextButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Done'))],
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.photo_outlined),
+                tooltip: 'Full photo',
+                onPressed: _openPhoto,
+              ),
+              TextButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Done')),
+            ],
           ),
           body: Column(children: [
             Expanded(child: _previewing ? _buildPreview() : _buildCrop()),
