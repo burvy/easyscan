@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../models/paper_sample.dart';
+import '../models/scan_page.dart';
 import '../models/strokes.dart';
 import '../src/rust/api.dart' as bridge;
 import '../state/scan_session.dart';
@@ -257,7 +258,7 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
     if (points.length < 2) points = [points.first, points.first];
     final widths = _tool == StrokeTool.pen ? _penWidths : _whiteoutWidths;
     final width = widths[_sizeIndex];
-    var color = _penColors[_colorIndex];
+    var color = _penColors[_penIndex];
     if (_tool == StrokeTool.whiteout) {
       color = (await _paperColor(points, width)).toARGB32();
       if (!mounted) return;
@@ -390,7 +391,7 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
                     Positioned.fromRect(
                       rect: rect,
                       child: CustomPaint(
-                        painter: _StrokePainter(pending, _live, _tool, _penColors[_colorIndex],
+                        painter: _StrokePainter(pending, _live, _tool, _penColors[_penIndex],
                             (_tool == StrokeTool.pen ? _penWidths : _whiteoutWidths)[_sizeIndex]),
                       ),
                     ),
@@ -408,6 +409,11 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
         );
       });
 
+  bool get _blackAndWhite => widget.session.pageById(widget.pageId)?.filter == PageFilter.blackWhite;
+
+  /// B&W burns every pen colour to black, so the pen is forced to black there.
+  int get _penIndex => _blackAndWhite ? 0 : _colorIndex;
+
   Widget _toolbar() => ColoredBox(
         color: Theme.of(context).colorScheme.surface,
         child: SafeArea(
@@ -423,11 +429,18 @@ class _AnnotateScreenState extends State<AnnotateScreen> {
               selected: {_tool},
               onSelectionChanged: (s) => setState(() => _tool = s.first),
             ),
+            if (_tool == StrokeTool.pen && _blackAndWhite)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('Black & white pages take a black pen. Colours show with Original or Enhanced.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ),
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-              if (_tool == StrokeTool.pen)
+              if (_tool == StrokeTool.pen && !_blackAndWhite)
                 for (var i = 0; i < _penColors.length; i++) _colorDot(i),
-              if (_tool == StrokeTool.pen) const SizedBox(width: 12),
+              if (_tool == StrokeTool.pen && !_blackAndWhite) const SizedBox(width: 12),
               for (var i = 0; i < 3; i++) _sizeDot(i),
             ]),
           ]),
