@@ -26,15 +26,16 @@ Future<void> showExportDialog(BuildContext context, ScanSession session) async {
   if (shared == true && context.mounted) await _offerNewScan(context, session);
 }
 
-/// The PDF is already out; clearing is the user's choice, not a side effect.
+/// The PDF is already out; starting a new scan is the user's choice. This scan
+/// stays in Past scans either way.
 Future<void> _offerNewScan(BuildContext context, ScanSession session) async {
   final start = await showDialog<bool>(
     context: context,
     builder: (dialog) => AlertDialog(
       title: const Text('Start a new scan?'),
-      content: const Text('Your PDF is exported. Clear these pages to start a new scan?'),
+      content: const Text('Your PDF is exported. This scan stays in Past scans.'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Keep pages')),
+        TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Keep open')),
         FilledButton(
           onPressed: () => Navigator.pop(dialog, true),
           child: const Text('Start a new scan'),
@@ -42,7 +43,7 @@ Future<void> _offerNewScan(BuildContext context, ScanSession session) async {
       ],
     ),
   );
-  if (start == true) session.clear();
+  if (start == true) await session.newScan();
 }
 
 class _ExportDialog extends StatefulWidget {
@@ -56,7 +57,7 @@ class _ExportDialog extends StatefulWidget {
 
 class _ExportDialogState extends State<_ExportDialog> {
   late final TextEditingController _name =
-      TextEditingController(text: _defaultName(DateTime.now()));
+      TextEditingController(text: widget.session.name);
   PdfPageSize _pageSize = _ExportChoices.pageSize;
   ExportQuality _quality = _ExportChoices.quality;
 
@@ -72,12 +73,6 @@ class _ExportDialogState extends State<_ExportDialog> {
   void dispose() {
     _name.dispose();
     super.dispose();
-  }
-
-  /// "Scan 2026-10-28 14.05", the default name in the file field.
-  static String _defaultName(DateTime t) {
-    String two(int v) => v.toString().padLeft(2, '0');
-    return 'Scan ${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}.${two(t.minute)}';
   }
 
   Future<void> _export() async {
