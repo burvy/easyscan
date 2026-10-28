@@ -19,6 +19,9 @@
 - 017 last-shot thumbnail + count while scanning: done
 - 018 swipe between pages in viewer + crop: done, then 019 filter apply-to-all + default: done
 
+## Also running: G4 groundwork
+- 023 AdMob banner + UMP consent with test IDs (OpenCode2)
+
 ## Next groups
 - G3c: 021 past scans you can reopen and edit; 022 draw on pages (pen + cover/white-out) to change answers. Design agreed before coding.
 - G4 ads: single AdMob banner + UMP consent (13+ audience).
