@@ -4,5 +4,6 @@
 //! the Flutter app through a thin flutter_rust_bridge crate.
 
 pub mod detect;
+pub mod draw;
 pub mod filter;
 pub mod pdf;
