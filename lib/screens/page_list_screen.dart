@@ -2,12 +2,14 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../ads/ads_feature.dart';
 import '../models/scan_page.dart';
 import '../state/scan_session.dart';
 import 'camera_screen.dart';
 import 'crop_screen.dart';
 import 'export_dialog.dart';
 import 'page_view_screen.dart';
+import 'scans_screen.dart';
 
 /// Home screen: the pages of the current scan, drag to reorder. Tap a page to
 /// see its result large; long-press for Retake, Crop & filter and Delete.
@@ -37,19 +39,24 @@ class PageListScreen extends StatelessWidget {
     });
   }
 
-  Future<void> _confirmNewScan(BuildContext context) async {
-    final discard = await showDialog<bool>(
+  Future<void> _rename(BuildContext context) async {
+    final controller = TextEditingController(text: session.name);
+    final name = await showDialog<String>(
       context: context,
       builder: (dialog) => AlertDialog(
-        title: const Text('Discard the current scan?'),
-        content: const Text('All pages in this scan will be deleted.'),
+        title: const Text('Rename scan'),
+        content: TextField(controller: controller, autofocus: true, textCapitalization: TextCapitalization.sentences),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Discard')),
+          TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialog, controller.text), child: const Text('Rename')),
         ],
       ),
     );
-    if (discard == true) session.clear();
+    if (name != null) session.rename(name);
+  }
+
+  void _openHistory(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ScansScreen(session: session)));
   }
 
   void _openPage(BuildContext context, int index) {
@@ -102,18 +109,28 @@ class PageListScreen extends StatelessWidget {
           final pages = session.pages;
           return Scaffold(
             appBar: AppBar(
-              title: const Text('EasyScan'),
+              title: GestureDetector(
+                onTap: pages.isEmpty ? null : () => _rename(context),
+                child: Text(pages.isEmpty ? 'EasyScan' : session.name, overflow: TextOverflow.ellipsis),
+              ),
               actions: [
+                IconButton(
+                  tooltip: 'Past scans',
+                  icon: const Icon(Icons.history),
+                  onPressed: () => _openHistory(context),
+                ),
                 TextButton(
-                  onPressed: pages.isEmpty ? null : () => _confirmNewScan(context),
+                  onPressed: pages.isEmpty ? null : session.newScan,
                   child: const Text('New scan'),
                 ),
                 TextButton(
                   onPressed: pages.isEmpty ? null : () => showExportDialog(context, session),
                   child: const Text('Export'),
                 ),
+                const AdPrivacyAction(),
               ],
             ),
+            bottomNavigationBar: const AdBanner(),
             body: pages.isEmpty
                 ? const _EmptyState()
                 : ReorderableListView.builder(
