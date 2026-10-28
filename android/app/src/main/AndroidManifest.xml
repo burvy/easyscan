@@ -29,13 +29,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-    <!-- TODO(release): swap with lib/ads/ad_ids.dart (adMobAppId) for burvy's
-         real AdMob app ID. Unlike unit IDs, the app ID is fine (standard) to
-         be real in debug builds too. Current value: Google's test ID from
-         https://developers.google.com/admob/android/test-ads -->
+    <!-- burvy's AdMob app ID. Mirrors adMobAppId in lib/ads/ad_ids.dart; change
+         both together. The real app ID is fine in debug builds (only unit IDs
+         are pinned to test values there). -->
     <meta-data
         android:name="com.google.android.gms.ads.APPLICATION_ID"
-        android:value="ca-app-pub-3940256099942544~3347511713"/>
+        android:value="ca-app-pub-9646959833500648~1423284849"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

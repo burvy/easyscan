@@ -1,5 +1,5 @@
-// All AdMob IDs live here (plus the app ID in the Android manifest) so the
-// release swap is one edit per ID.
+// All AdMob IDs live here (plus the app ID in the Android manifest) so an ID
+// change is one edit per ID.
 
 import 'package:flutter/foundation.dart';
 
@@ -10,16 +10,15 @@ import 'package:flutter/foundation.dart';
 /// reads it from the manifest only). Both copies must be swapped together.
 /// Unlike unit IDs, the app ID is safe to use in debug builds too — the ban
 /// risk is in loading real ads, which never happens below.
-const String adMobAppId = 'ca-app-pub-3940256099942544~3347511713';
+const String adMobAppId = 'ca-app-pub-9646959833500648~1423284849';
 
 /// Google's dedicated banner test unit: always fills, never pays out.
 /// https://developers.google.com/admob/android/test-ads
 const String _googleTestBannerUnitId =
     'ca-app-pub-3940256099942544/6300978111';
 
-/// TODO(release): replace with burvy's real banner ad unit ID once created in
-/// the AdMob account.
-const String _realBannerUnitId = _googleTestBannerUnitId;
+/// burvy's real banner ad unit (AdMob app "EasyScan").
+const String _realBannerUnitId = 'ca-app-pub-9646959833500648/8863837343';
 
 /// The banner ad unit ID, shown at the bottom of the page list screen.
 ///
