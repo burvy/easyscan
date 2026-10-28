@@ -11,6 +11,7 @@
 - 011 export PDF + share: done
 - 004 detection on light backgrounds: done (7/9 within 2%)
 - 005 filter tuning: done; follow-up 014 (ruled lines, pencil/marker re-check) when new photos land
+- 015 keep the current scan across app restarts (Sonnet)
 - 013 big zoomable page view + original toggle + retake (Haiku)
 
 ## Next groups

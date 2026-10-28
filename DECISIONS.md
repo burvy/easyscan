@@ -14,3 +14,4 @@ One line per decision, with the reason.
 - 2026-10-28 Bridge passes file paths, not image bytes, for full-res work (camera JPEG in, processed JPEG/PDF out). 12MP PNG round-trips through FFI are slow and double memory. Byte APIs stay only for small previews.
 - 2026-10-28 Page model lives in Dart: original photo path + corners + filter (+ rotation). Processing is re-run from the original, so edits are non-destructive and retakes just replace the original.
 - 2026-10-28: B&W drops blue ruled lines entirely (keep only writing); Enhance stays natural with lines. Reason: burvy prefers clean writing for teachers; dashed lines were worst of both. (014)
+- 2026-10-28 The in-progress scan persists across app restarts (one scan, not history); cleared only by an explicit New scan. Reason: Android kills backgrounded apps, and a lost multi-page scan is the worst failure for a student. (015)
