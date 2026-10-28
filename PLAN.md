@@ -10,6 +10,7 @@
 - 010 crop handles + filter picker (after 008 and 009)
 - 011 export PDF + share: done
 - then tune on real photos: 004 detection on light backgrounds, 005 filter thresholds
+- 005 filter tuning: done; follow-up 014 (ruled lines, pencil/marker re-check) when new photos land
 - 013 big zoomable page view + original toggle + retake (Haiku)
 
 ## Next groups
