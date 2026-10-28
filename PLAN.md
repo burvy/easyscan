@@ -11,7 +11,7 @@
 - 011 export PDF + share: done
 - 004 detection on light backgrounds: done (10/12 within 2%)
 - 005 filter tuning: done; 014 B&W drops ruled lines: done (no highlighter to test; faint rule stubs accepted)
-- 015 keep the current scan across app restarts (Sonnet)
+- 015 keep the current scan across app restarts + New scan menu: done
 - 013 big zoomable page view + original toggle + retake: done
 
 ## Next groups
