@@ -12,7 +12,7 @@ Everything is user-level (no admin) under `C:\dev`. Installed 2026-10-27.
 | USB driver (`extras;google;usb_driver`) | rev 13 | `C:\dev\android-sdk\extras\google\usb_driver` |
 | Emulator + image | 37.2.12 / `system-images;android-35;google_apis;x86_64` | |
 | AVD | `easyscan_pixel` (pixel_6) | `~\.android\avd` |
-| JDK for Gradle (`flutter config --jdk-dir`) | Temurin 17.0.20 x64, zip from Adoptium | `C:devjdk-17.0.20.1+1` |
+| JDK for Gradle (`flutter config --jdk-dir`) | Temurin 17.0.20 x64, zip from Adoptium | `C:\dev\jdk-17.0.20.1+1` |
 | flutter_rust_bridge_codegen | 2.13.0 (`cargo install flutter_rust_bridge_codegen`) | cargo bin |
 | Rust targets (nightly default toolchain) | aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android | rustup |
 
