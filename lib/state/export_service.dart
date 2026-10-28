@@ -90,7 +90,7 @@ class ExportService {
   /// Removes characters that are invalid in file names on Android and common
   /// desktops. Falls back to a fixed name if nothing usable is left.
   static String safeFileName(String name) {
-    final cleaned = name.replaceAll(RegExp(r'[\/:*?"<>|\x00-\x1f]'), '').trim();
+    final cleaned = name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '').trim();
     return cleaned.isEmpty ? 'Scan' : cleaned;
   }
 }
