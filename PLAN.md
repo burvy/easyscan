@@ -23,6 +23,6 @@
 - 023 AdMob banner + UMP consent with test IDs DONE (Sonnet2; fixed AdSize.banner, Impeller stays on)
 
 ## Next groups
-- G3c: 021 past scans DONE; 024 test fix DONE; 022 draw on pages (pen + white-out), in progress (OpenCode); 025 orphan-file sweep (proposed, cheap).
+- G3c DONE: 021 past scans, 022 draw on pages, 024 test fix, 026 thumbnail cards. Open: 025 orphan sweep + missing-thumb regen (cheap). Pending ask 018: pen colours under B&W.
 - G4 ads: single AdMob banner + UMP consent (13+ audience).
 - G5 release: app icon/name, signing, privacy policy, Play Console walkthrough with burvy.
