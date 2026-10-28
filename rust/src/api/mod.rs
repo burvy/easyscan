@@ -328,8 +328,14 @@ mod tests {
     /// surface — with EXIF orientation 6 the app must see a 20×40 portrait
     /// with the page along its left side.
     fn sideways_page_jpeg(orientation: u16) -> Vec<u8> {
-        let mut img = image::RgbImage::from_fn(40, 20, |x, y| {
-            let page = y > 11 && (3..=36).contains(&x);
+        sideways_page_jpeg_scaled(orientation, 1)
+    }
+
+    /// The same picture with every dimension multiplied by `scale`; the
+    /// detector needs a realistically sized frame to find the page.
+    fn sideways_page_jpeg_scaled(orientation: u16, scale: u32) -> Vec<u8> {
+        let mut img = image::RgbImage::from_fn(40 * scale, 20 * scale, |x, y| {
+            let page = y > 11 * scale && (3 * scale..=36 * scale + scale - 1).contains(&x);
             let dark = (((x * 7 + y * 13) % 60) + 40) as u8;
             if page {
                 image::Rgb([250, 250, 250])
@@ -352,11 +358,14 @@ mod tests {
 
     #[test]
     fn exif_orientation_6_is_applied() {
-        let path = temp_file("easyscan_rot6.jpg", &sideways_page_jpeg(6));
+        // 10x the 40x20 base picture: detection needs a realistic frame size,
+        // this test is about the EXIF orientation reaching the detector.
+        const SCALE: u32 = 10;
+        let path = temp_file("easyscan_rot6.jpg", &sideways_page_jpeg_scaled(6, SCALE));
 
         let size = image_size_file(path.display().to_string()).unwrap();
         assert_eq!(
-            (20, 40),
+            (20 * SCALE, 40 * SCALE),
             (size.width, size.height),
             "orientation must swap the axes"
         );
@@ -369,7 +378,7 @@ mod tests {
             detected
                 .corners
                 .iter()
-                .all(|c| c.x >= 0.0 && c.x <= 9.0 && c.y >= 0.0 && c.y <= 40.0),
+                .all(|c| c.x >= 0.0 && c.x <= 9.0 * SCALE as f32 && c.y >= 0.0 && c.y <= 40.0 * SCALE as f32),
             "corners must be in the oriented frame: {:?}",
             detected.corners
         );
