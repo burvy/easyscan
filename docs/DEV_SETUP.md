@@ -9,6 +9,7 @@ Everything is user-level (no admin) under `C:\dev`. Installed 2026-10-27.
 | Platform / build-tools | android-36 / 36.0.0 | `C:\dev\android-sdk` |
 | NDK (Flutter's default `ndkVersion`) | 28.2.13676358 | `C:\dev\android-sdk\ndk` |
 | CMake | 3.22.1 | `C:\dev\android-sdk\cmake` |
+| USB driver (`extras;google;usb_driver`) | rev 13 | `C:\dev\android-sdk\extras\google\usb_driver` |
 | Emulator + image | 37.2.12 / `system-images;android-35;google_apis;x86_64` | |
 | AVD | `easyscan_pixel` (pixel_6) | `~\.android\avd` |
 | Java | Temurin JRE 17 (already installed) | `C:\Program Files (x86)\Eclipse Adoptium\jre-17.0.17.10-hotspot` |
@@ -29,6 +30,16 @@ avdmanager create avd -n easyscan_pixel -k "system-images;android-35;google_apis
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 cargo install flutter_rust_bridge_codegen
 ```
+
+## Testing on your phone
+1. Settings > About phone > tap *Build number* 7 times to unlock Developer options.
+2. Settings > System > Developer options > turn on *USB debugging*.
+3. Plug in with a data-capable USB cable and accept the "Allow USB debugging?" prompt (tick *Always allow*). Set USB mode to *File transfer* if nothing appears.
+4. `adb devices` should list the phone as `device` (`unauthorized` = accept the prompt on the phone; empty list = driver or cable problem). `flutter devices` should show it too.
+5. If Windows does not recognise it, install your brand's OEM USB driver (Samsung, Xiaomi, etc.). For Pixel/generic devices use Google's driver, already downloaded to `C:\dev\android-sdk\extras\google\usb_driver` (Device Manager > the phone > Update driver > Browse my computer > that folder; needs admin).
+6. Run the app with `flutter run -d <device id>`.
+
+The emulator stays as a secondary target once the hypervisor is enabled.
 
 ## Known issues
 - `flutter doctor`: only Chrome is missing (web, not needed).
