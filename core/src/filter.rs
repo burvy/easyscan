@@ -24,7 +24,12 @@ pub enum Filter {
 }
 
 /// A pixel darker than this fraction of the local paper brightness is ink.
-const INK_THRESHOLD: f32 = 0.7;
+/// Faint pencil is only ~15-20% darker than the paper under it, so this
+/// has to sit well above where pen ink (~half the paper brightness or
+/// less) lives; plain paper texture sits within a few percent of the
+/// estimate, so 0.85 leaves a paper-noise margin of the same size the
+/// pencil needs.
+const INK_THRESHOLD: f32 = 0.85;
 /// Enhance maps this fraction of the local paper brightness to pure white, so
 /// slightly grey paper still comes out white.
 const PAPER_WHITE: f32 = 0.9;
@@ -32,6 +37,18 @@ const PAPER_WHITE: f32 = 0.9;
 const GRID_CELLS: u32 = 32;
 /// Smallest cell in pixels, so tiny images do not get a grid of one-pixel cells.
 const MIN_CELL: u32 = 8;
+/// The paper brightness of a cell is this quantile of its pixels, not the
+/// strict maximum: one hot sensor pixel (or a small bright speck) cannot
+/// move the estimate, while paper — the majority of every cell bar those
+/// buried in a fat ink stroke — still sets it.
+const PAPER_PERCENTILE: f32 = 0.97;
+/// A cell fully inside a solid ink area has no paper of its own; its
+/// estimate is raised to the brightest cell within this cell radius, so the
+/// middle of a solid marker stroke stays black instead of punching a white
+/// hole. Solid ink up to 2×radius cells across is covered — about 380 px at
+/// 12 MP (a cell is ~94 px), a fat marker blob or filled-in box. Wider
+/// blackouts than that still hole out at the centre.
+const NEIGHBORHOOD_RADIUS: usize = 2;
 
 /// Apply `filter` to a photo and return the result.
 ///
@@ -95,24 +112,79 @@ struct Background {
 }
 
 impl Background {
-    /// Estimate paper brightness from the brightest pixel in each grid cell.
-    /// Ink is darker than paper, so a cell that holds text still reports the
-    /// paper. Cells are blended bilinearly, so the estimate changes smoothly
+    /// Estimate paper brightness per grid cell, robust to two failure modes
+    /// of the naive per-cell max: a single bright speck inflating the est-
+    /// imate (making everything nearby too ink), and a cell buried entirely
+    /// in solid ink reporting ink as paper (punching a white hole into it).
+    /// Cells are blended bilinearly, so the estimate changes smoothly
     /// across the page.
     fn estimate(pixels: &[u8], width: u32, height: u32, channels: usize) -> Self {
         let cell = (width.min(height) / GRID_CELLS).max(MIN_CELL);
         let cols = width.div_ceil(cell) as usize;
         let rows = height.div_ceil(cell) as usize;
-        let mut values = vec![0u8; cols * rows * channels];
+        let cells = cols * rows;
+
+        // Pixel histogram per cell per channel: 256 bins, u32 — one pass,
+        // and exact enough to pick a percentile. A 12 MP photo's grid holds
+        // about 4 MB of counts for RGB; cheaper than an integral image and
+        // plenty for the two questions we ask (see below).
+        let mut counts = vec![0u32; cells * channels * 256];
+        let mut cell_pixels = vec![0u32; cells];
 
         let stride = width as usize * channels;
         for y in 0..height as usize {
             let row = &pixels[y * stride..(y + 1) * stride];
             let grid_row = (y / cell as usize) * cols;
             for (x, px) in row.chunks_exact(channels).enumerate() {
-                let base = (grid_row + x / cell as usize) * channels;
+                let index = grid_row + x / cell as usize;
+                cell_pixels[index] += 1;
+                let base = index * channels;
                 for (c, &v) in px.iter().enumerate() {
-                    values[base + c] = values[base + c].max(v);
+                    counts[(base + c) * 256 + v as usize] += 1;
+                }
+            }
+        }
+
+        // Paper estimate 1: the [`PAPER_PERCENTILE`] quantile of each cell.
+        // The strict max was sensitive to one hot pixel; a few pixels cannot
+        // move this.
+        let mut values = vec![0u8; cells * channels];
+        for c_index in 0..cells * channels {
+            let target = (cell_pixels[c_index / channels] as f32 * PAPER_PERCENTILE).ceil() as u32;
+            let hist = &counts[c_index * 256..(c_index + 1) * 256];
+            let mut seen = 0u32;
+            for (v, &n) in hist.iter().enumerate() {
+                seen += n;
+                if seen >= target {
+                    values[c_index] = v as u8;
+                    break;
+                }
+            }
+            // An empty cell cannot happen (the grid covers every pixel), but
+            // if it ever does the value stays 0, which the callers clamp.
+        }
+
+        // Paper estimate 2: raise each cell to the brightest neighbour
+        // within [`NEIGHBORHOOD_RADIUS`] (measured in cells, so it scales
+        // with the page). Only cells with no paper of their own — buried in
+        // fat ink strokes — see their estimate move much; for normal cells
+        // the brightest neighbour within two cells is nearly their own
+        // value, given how gently lighting changes over that distance.
+        let mut raised = vec![0u8; cells * channels];
+        for j in 0..rows {
+            for i in 0..cols {
+                for c in 0..channels {
+                    let mut m = 0u8;
+                    for jj in j.saturating_sub(NEIGHBORHOOD_RADIUS)
+                        ..=(j + NEIGHBORHOOD_RADIUS).min(rows - 1)
+                    {
+                        for ii in i.saturating_sub(NEIGHBORHOOD_RADIUS)
+                            ..=(i + NEIGHBORHOOD_RADIUS).min(cols - 1)
+                        {
+                            m = m.max(values[(jj * cols + ii) * channels + c]);
+                        }
+                    }
+                    raised[(j * cols + i) * channels + c] = m;
                 }
             }
         }
@@ -120,7 +192,7 @@ impl Background {
         Background {
             cols,
             channels,
-            values,
+            values: raised,
             xs: axis_weights(width, cell, cols),
             ys: axis_weights(height, cell, rows),
         }
@@ -247,6 +319,156 @@ mod tests {
                 "ink at x={ink_x} is {ink:?}"
             );
         }
+    }
+
+    /// A single bright speck must not inflate the paper estimate of its
+    /// cell: pixels under the old strict-max estimate (which turns the
+    /// speck's cell to "paper 255") used to speckle black. Large enough to
+    /// make the grid cells realistic (~30 px at this size).
+    #[test]
+    fn bright_speck_does_not_speckle_the_paper() {
+        let speck = (599u32, 300); // centre cell of a 1200×600 page
+        let smudge = (560..640, 260..340); // grey paper, same cell area
+        let gray: GrayImage = ImageBuffer::from_fn(1200, 600, |x, y| {
+            let v = if smudge.0.contains(&x) && smudge.1.contains(&y) {
+                170.0
+            } else {
+                200.0
+            };
+            // 4 speck pixels, bright: under a strict-max estimate these 4
+            // pixels alone ruled a ~900-px cell.
+            Luma([
+                if (speck.0..speck.0 + 2).contains(&x) && (speck.1..speck.1 + 2).contains(&y) {
+                    255
+                } else {
+                    v as u8
+                },
+            ])
+        });
+        let out = match apply(&DynamicImage::ImageLuma8(gray), Filter::BlackWhite) {
+            DynamicImage::ImageLuma8(img) => img,
+            other => panic!("expected Luma8, got {:?}", other.color()),
+        };
+
+        // Grey paper and speck: no black speckle. The smudge is the paper
+        // itself (dirty but not ink), and the speck is not ink either.
+        for y in smudge.1.clone() {
+            for x in smudge.0.clone() {
+                let v = out.get_pixel(x, y).0[0];
+                assert_eq!(v, 255, "speckle at ({x}, {y})");
+            }
+        }
+    }
+
+    /// A solid ink patch bigger than a grid cell: cells with no paper of
+    /// their own must borrow from the neighbourhood instead of classifying
+    /// their ink as "local paper" (which used to punch a white hole into
+    /// the middle of, e.g., a fat marker block).
+    #[test]
+    fn solid_ink_patch_stays_black_in_the_middle() {
+        let patch = (500u32..568, 250..318); // ~3.8×3.8 cells of solid ink
+        let gray: GrayImage = ImageBuffer::from_fn(1200, 600, |x, y| {
+            Luma([if patch.0.contains(&x) && patch.1.contains(&y) {
+                30
+            } else {
+                230
+            }])
+        });
+        let out = match apply(&DynamicImage::ImageLuma8(gray), Filter::BlackWhite) {
+            DynamicImage::ImageLuma8(img) => img,
+            other => panic!("expected Luma8, got {:?}", other.color()),
+        };
+
+        for y in patch.1.clone() {
+            for x in patch.0.clone() {
+                let v = out.get_pixel(x, y).0[0];
+                assert_eq!(v, 0, "white hole at ({x}, {y})");
+            }
+        }
+    }
+
+    /// Hand-run visual harness over the private real photos in
+    /// `testdata/photos/` (gitignored — never commit them or their
+    /// outputs): `cargo test -p easyscan-core --release -- --ignored
+    /// --nocapture photo_filter_preview`
+    ///
+    /// Decodes each photo with its EXIF orientation applied, crops it with
+    /// today's page detection (full frame when detection fails), runs every
+    /// filter, and writes `target/filter_preview/<photo>/<filter>.png` for
+    /// side-by-side eyeballing.
+    #[test]
+    #[ignore]
+    fn photo_filter_preview() {
+        use image::ImageDecoder;
+
+        let photos = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/photos");
+        let out_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/filter_preview");
+        let _ = std::fs::remove_dir_all(&out_root);
+
+        let Ok(entries) = std::fs::read_dir(&photos) else {
+            eprintln!("no photos dir at {}; nothing to preview", photos.display());
+            return;
+        };
+        let mut paths: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("jpg"))
+            })
+            .collect();
+        paths.sort();
+        if paths.is_empty() {
+            eprintln!("no photos in {}; nothing to preview", photos.display());
+            return;
+        }
+        let photo_count = paths.len();
+
+        let start = Instant::now();
+        for path in paths {
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("photo")
+                .to_string();
+
+            // Orient + decode exactly like the bridge does for camera JPEGs.
+            let reader = image::ImageReader::open(&path).expect("open photo");
+            let mut decoder = reader.into_decoder().expect("photo decoder");
+            let orientation = decoder.orientation().expect("photo orientation");
+            let mut photo = image::DynamicImage::from_decoder(decoder).expect("photo decode");
+            photo.apply_orientation(orientation);
+
+            // The page the app would process, or the full frame if the
+            // detector fails on this photo.
+            let detection = crate::detect::detect_page(&photo);
+            let page = if detection.found {
+                crate::detect::warp(&photo, &detection.quad)
+            } else {
+                eprintln!("{stem}: detection miss, filtering the full frame");
+                photo.clone()
+            };
+
+            let out_dir = out_root.join(&stem);
+            std::fs::create_dir_all(&out_dir).expect("preview dir");
+            for filter in [
+                Filter::Original,
+                Filter::Grayscale,
+                Filter::Enhance,
+                Filter::BlackWhite,
+            ] {
+                let name = format!("{filter:?}.png").to_lowercase();
+                apply(&page, filter)
+                    .save(out_dir.join(&name))
+                    .expect("save preview");
+            }
+            eprintln!("{stem}: page {}×{} -> 4 PNGs", page.width(), page.height());
+        }
+        eprintln!(
+            "photo preview: {photo_count} photos in {:?}",
+            start.elapsed()
+        );
     }
 
     /// Timing check on a 12 MP photo. Run with
