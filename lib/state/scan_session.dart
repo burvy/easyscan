@@ -133,6 +133,7 @@ class ScanSession extends ChangeNotifier {
       session._deleteFolder(session._path);
       session._startFresh();
     }
+    session._sweepStoredScans();
     return session;
   }
 
@@ -183,6 +184,8 @@ class ScanSession extends ChangeNotifier {
     _deleteOrphans();
     for (final p in _pages) {
       if (!p.isPrepared) _prepareInBackground(p.id);
+      // Working copy present but thumbnail gone: redo it (else the list shows the whole photo).
+      if (p.isPrepared && p.thumbPath == null) _refreshThumb(p.id);
     }
   }
 
@@ -196,6 +199,34 @@ class ScanSession extends ChangeNotifier {
     try {
       for (final e in Directory(_path).listSync()) {
         if (e is File && !keep.contains(_baseName(e.path))) _deleteFile(e.path);
+      }
+    } on FileSystemException {
+      // Best effort.
+    }
+  }
+
+  /// Deletes, in every stored scan but the open one, the files its state.json
+  /// does not reference (renders that finished after the scan was left). A
+  /// folder whose state.json is missing or unreadable is left alone.
+  void _sweepStoredScans() {
+    try {
+      for (final dir in _scansDir.listSync()) {
+        if (dir is! Directory || _baseName(dir.path) == _id) continue;
+        final keep = <String>{_stateFile};
+        try {
+          final json = jsonDecode(File('${dir.path}/$_stateFile').readAsStringSync()) as Map;
+          for (final page in json['pages'] as List) {
+            for (final key in const ['original', 'working', 'thumb']) {
+              final name = (page as Map)[key];
+              if (name is String) keep.add(name);
+            }
+          }
+        } catch (_) {
+          continue;
+        }
+        for (final e in dir.listSync()) {
+          if (e is File && !keep.contains(_baseName(e.path))) _deleteFile(e.path);
+        }
       }
     } on FileSystemException {
       // Best effort.
