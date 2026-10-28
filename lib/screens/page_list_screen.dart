@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/scan_page.dart';
 import '../state/scan_session.dart';
 import 'camera_screen.dart';
+import 'export_dialog.dart';
 
 /// Home screen: the pages of the current scan, drag to reorder, tap for
 /// actions. Tasks 010 (crop/filter) and 011 (export) hook in at the marked
@@ -78,12 +79,8 @@ class PageListScreen extends StatelessWidget {
             appBar: AppBar(
               title: const Text('EasyScan'),
               actions: [
-                // Placeholder for task 011 (export and share).
                 TextButton(
-                  onPressed: pages.isEmpty
-                      ? null
-                      : () => ScaffoldMessenger.of(context)
-                          .showSnackBar(const SnackBar(content: Text('Export is coming soon'))),
+                  onPressed: pages.isEmpty ? null : () => showExportDialog(context, pages),
                   child: const Text('Export'),
                 ),
               ],
