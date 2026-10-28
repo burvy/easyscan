@@ -127,12 +127,32 @@ class PageListScreen extends StatelessWidget {
                     itemCount: pages.length,
                     onReorderItem: session.reorder,
                     buildDefaultDragHandles: false,
-                    itemBuilder: (context, i) => _PageTile(
+                    itemBuilder: (context, i) => Dismissible(
                       key: ValueKey(pages[i].id),
-                      page: pages[i],
-                      index: i,
-                      onTap: () => _openPage(context, i),
-                      onLongPress: () => _showActions(context, i),
+                      // Swipe left deletes (with Undo); swipe right retakes. The
+                      // row never leaves the list itself: the session change does.
+                      confirmDismiss: (direction) async {
+                        if (direction == DismissDirection.endToStart) {
+                          _delete(context, i);
+                        } else {
+                          _openCamera(context, retakeIndex: i);
+                        }
+                        return false;
+                      },
+                      background: _SwipeBackground(
+                          color: Theme.of(context).colorScheme.primaryContainer,
+                          icon: Icons.camera_alt_outlined,
+                          alignment: Alignment.centerLeft),
+                      secondaryBackground: _SwipeBackground(
+                          color: Theme.of(context).colorScheme.errorContainer,
+                          icon: Icons.delete_outline,
+                          alignment: Alignment.centerRight),
+                      child: _PageTile(
+                        page: pages[i],
+                        index: i,
+                        onTap: () => _openPage(context, i),
+                        onLongPress: () => _showActions(context, i),
+                      ),
                     ),
                   ),
             floatingActionButton: FloatingActionButton.extended(
@@ -147,7 +167,6 @@ class PageListScreen extends StatelessWidget {
 
 class _PageTile extends StatelessWidget {
   const _PageTile({
-    super.key,
     required this.page,
     required this.index,
     required this.onTap,
@@ -179,6 +198,22 @@ class _PageTile extends StatelessWidget {
           index: index,
           child: const Padding(padding: EdgeInsets.all(12), child: Icon(Icons.drag_handle)),
         ),
+      );
+}
+
+class _SwipeBackground extends StatelessWidget {
+  const _SwipeBackground({required this.color, required this.icon, required this.alignment});
+
+  final Color color;
+  final IconData icon;
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: color,
+        alignment: alignment,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Icon(icon),
       );
 }
 
