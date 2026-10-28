@@ -8,8 +8,8 @@
 //!
 //! No text layer, encryption, or non-JPEG compression (non-goals in DESIGN.md).
 
-use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
+use image::codecs::jpeg::JpegEncoder;
 
 /// Page geometry for exported pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,14 +81,27 @@ impl Jpeg {
     /// rotation must be baked into the pixels before this point.
     pub fn new(bytes: Vec<u8>) -> Result<Jpeg, String> {
         match scan_jpeg(&bytes) {
-            None => Err("not a baseline JPEG (wrong magic, no SOF0/SOF1 marker, progressive, or truncated)".into()),
+            None => Err(
+                "not a baseline JPEG (wrong magic, no SOF0/SOF1 marker, progressive, or truncated)"
+                    .into(),
+            ),
             Some(info) if info.components == 1 => {
                 check_exif(&bytes)?;
-                Ok(Jpeg { grayscale: true, width: info.width, height: info.height, bytes })
+                Ok(Jpeg {
+                    grayscale: true,
+                    width: info.width,
+                    height: info.height,
+                    bytes,
+                })
             }
             Some(info) if info.components == 3 => {
                 check_exif(&bytes)?;
-                Ok(Jpeg { grayscale: false, width: info.width, height: info.height, bytes })
+                Ok(Jpeg {
+                    grayscale: false,
+                    width: info.width,
+                    height: info.height,
+                    bytes,
+                })
             }
             Some(info) => Err(format!(
                 "{}-component JPEG (CMYK or unusable for our purposes); decode and re-encode instead",
@@ -194,7 +207,9 @@ fn exif_orientation(jpeg: &[u8]) -> u16 {
             return 0;
         };
         if marker == 0xE1 {
-            let o = jpeg.get(m + 3..m + 1 + seg_len).and_then(parse_exif_orientation);
+            let o = jpeg
+                .get(m + 3..m + 1 + seg_len)
+                .and_then(parse_exif_orientation);
             if let Some(o) = o {
                 return o;
             }
@@ -211,11 +226,19 @@ fn parse_exif_orientation(data: &[u8]) -> Option<u16> {
     }
     let t = &data[6..];
     let little = t.len() >= 2 && t[0..2] == *b"II";
-    let u10 = |off: usize| if little { u16::from_le_bytes([t[off], t[off + 1]]) } else { u16::from_be_bytes([t[off], t[off + 1]]) };
-    let u30 = |off: usize| if little {
-        u32::from_le_bytes([t[off], t[off + 1], t[off + 2], t[off + 3]])
-    } else {
-        u32::from_be_bytes([t[off], t[off + 1], t[off + 2], t[off + 3]])
+    let u10 = |off: usize| {
+        if little {
+            u16::from_le_bytes([t[off], t[off + 1]])
+        } else {
+            u16::from_be_bytes([t[off], t[off + 1]])
+        }
+    };
+    let u30 = |off: usize| {
+        if little {
+            u32::from_le_bytes([t[off], t[off + 1], t[off + 2], t[off + 3]])
+        } else {
+            u32::from_be_bytes([t[off], t[off + 1], t[off + 2], t[off + 3]])
+        }
     };
     let ifd = u30(4) as usize;
     if ifd + 2 > t.len() {
@@ -256,7 +279,11 @@ fn realize(page: PageInput, quality: u8) -> Result<PageImage, String> {
             })
         }
         PageInput::Jpeg(j) => Ok(PageImage {
-            colorspace: if j.grayscale { "DeviceGray" } else { "DeviceRGB" },
+            colorspace: if j.grayscale {
+                "DeviceGray"
+            } else {
+                "DeviceRGB"
+            },
             jpeg: j.bytes,
             width_px: j.width,
             height_px: j.height,
@@ -275,7 +302,10 @@ fn realize(page: PageInput, quality: u8) -> Result<PageImage, String> {
 /// increasing numbers, and their byte offsets are recorded as they are
 /// written so the xref table at the end is exact.
 pub fn export_pdf(pages: &[DynamicImage], options: &PdfOptions) -> Vec<u8> {
-    debug_assert!(!pages.is_empty(), "export of an empty scan produces a PDF most viewers reject");
+    debug_assert!(
+        !pages.is_empty(),
+        "export of an empty scan produces a PDF most viewers reject"
+    );
     let mut out = Vec::new();
     let inputs = pages.iter().map(|p| PageInput::Image(p.clone()));
     export_pdf_pages(inputs, options, &mut out)
@@ -306,14 +336,13 @@ pub fn export_pdf_pages<W: std::io::Write>(
 
     // Object 1: catalog.
     d.start_object(1);
-    d.buf.extend_from_slice(b"<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    d.buf
+        .extend_from_slice(b"<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
 
     // Object 2: page tree. Pages take object numbers 3, 6, 9, ... (page,
     // content stream, image XObject each get three consecutive numbers), so
     // the kids list can be built before any page is written.
-    let kids: String = (0..count)
-        .map(|i| format!("{} 0 R ", 3 + 3 * i))
-        .collect();
+    let kids: String = (0..count).map(|i| format!("{} 0 R ", 3 + 3 * i)).collect();
     let tree = format!(
         "<< /Type /Pages /Kids [{}] /Count {} >>\nendobj\n",
         kids.trim_end(),
@@ -329,7 +358,9 @@ pub fn export_pdf_pages<W: std::io::Write>(
     // Title/Producer — the only metadata this export writes.
     let info_num = 3 + 3 * count;
     d.start_object(info_num);
-    d.buf.extend_from_slice(b"<< /Title (EasyScan scan) /Producer (EasyScan Core 0.1.0) >>\nendobj\n");
+    d.buf.extend_from_slice(
+        b"<< /Title (EasyScan scan) /Producer (EasyScan Core 0.1.0) >>\nendobj\n",
+    );
     d.finish_trailer(info_num);
 
     out.write_all(&d.buf).map_err(|e| e.to_string())?;
@@ -352,17 +383,20 @@ impl Doc {
 
     fn start_object(&mut self, num: usize) {
         self.offsets.push(self.buf.len());
-        self.buf.extend_from_slice(format!("{} 0 obj\n", num).as_bytes());
+        self.buf
+            .extend_from_slice(format!("{} 0 obj\n", num).as_bytes());
     }
 
     fn finish_trailer(&mut self, info_num: usize) {
         // xref: entry i is object i; object 0 is the free-list head.
         let xref_start = self.buf.len();
-        self.buf.extend_from_slice(format!("xref\n0 {}\n", self.offsets.len() + 1).as_bytes());
+        self.buf
+            .extend_from_slice(format!("xref\n0 {}\n", self.offsets.len() + 1).as_bytes());
         self.buf.extend_from_slice(b"0000000000 65535 f \n");
         let offsets = self.offsets.clone();
         for off in offsets {
-            self.buf.extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
+            self.buf
+                .extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
         }
         self.buf.extend_from_slice(
             format!(
@@ -388,7 +422,11 @@ fn write_page(d: &mut Doc, index: usize, image: PageImage, options: &PdfOptions)
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] \
          /Resources << /ProcSet [/PDF /ImageB /ImageC] \
          /XObject << /Im{} {} 0 R >> >> /Contents {} 0 R >>\nendobj\n",
-        media.0, media.1, index + 1, image_num, content_num
+        media.0,
+        media.1,
+        index + 1,
+        image_num,
+        content_num
     );
     d.buf.extend_from_slice(page_obj.as_bytes());
 
@@ -396,8 +434,19 @@ fn write_page(d: &mut Doc, index: usize, image: PageImage, options: &PdfOptions)
     // scaling/aspect handling: place (x, y), scale to (w, h). The q/Q
     // pair keeps the stream balanced for strict viewers and preflight.
     d.start_object(content_num);
-    let cmd = format!("q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n", w, h, x, y, index + 1);
-    let content = format!("<< /Length {} >>\nstream\n{}\nendstream\nendobj\n", cmd.len(), cmd);
+    let cmd = format!(
+        "q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n",
+        w,
+        h,
+        x,
+        y,
+        index + 1
+    );
+    let content = format!(
+        "<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+        cmd.len(),
+        cmd
+    );
     d.buf.extend_from_slice(content.as_bytes());
 
     d.start_object(image_num);
@@ -419,9 +468,9 @@ fn write_page(d: &mut Doc, index: usize, image: PageImage, options: &PdfOptions)
 fn encode_jpeg(page: &DynamicImage, quality: u8) -> (Vec<u8>, &'static str) {
     let quality = quality.clamp(1, 100);
     let (source, colorspace) = match page {
-        DynamicImage::ImageLuma8(_) | DynamicImage::ImageLumaA8(_) | DynamicImage::ImageLuma16(_) => {
-            (DynamicImage::ImageLuma8(page.to_luma8()), "DeviceGray")
-        }
+        DynamicImage::ImageLuma8(_)
+        | DynamicImage::ImageLumaA8(_)
+        | DynamicImage::ImageLuma16(_) => (DynamicImage::ImageLuma8(page.to_luma8()), "DeviceGray"),
         _ => (DynamicImage::ImageRgb8(page.to_rgb8()), "DeviceRGB"),
     };
     let mut jpeg = Vec::new();
@@ -469,7 +518,7 @@ fn fit_in(page: (f64, f64), image: (f64, f64)) -> ((f64, f64), (f64, f64, f64, f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{create_dir_all, File};
+    use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::PathBuf;
     use std::time::Instant;
@@ -534,9 +583,15 @@ mod tests {
             .expect("startxref")
             + "startxref\n".len();
         let eol = pdf[start..].iter().position(|&b| b == b'\n').unwrap();
-        let xref_off: usize =
-            std::str::from_utf8(&pdf[start..start + eol]).unwrap().parse().expect("numeric startxref");
-        assert_eq!(&pdf[xref_off..xref_off + 4], b"xref", "startxref must point at the table");
+        let xref_off: usize = std::str::from_utf8(&pdf[start..start + eol])
+            .unwrap()
+            .parse()
+            .expect("numeric startxref");
+        assert_eq!(
+            &pdf[xref_off..xref_off + 4],
+            b"xref",
+            "startxref must point at the table"
+        );
 
         let mut line = xref_off + "xref\n".len();
         let header_end = line + pdf[line..].iter().position(|&b| b == b'\n').unwrap();
@@ -552,7 +607,11 @@ mod tests {
                 assert_eq!(&entry[17..18], b"f");
             } else {
                 assert_eq!(&entry[17..18], b"n");
-                let off: usize = std::str::from_utf8(&entry[..10]).unwrap().trim().parse().unwrap();
+                let off: usize = std::str::from_utf8(&entry[..10])
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
                 let expect = format!("{} 0 obj", object);
                 assert_eq!(
                     &pdf[off..off + expect.len()],
@@ -572,7 +631,10 @@ mod tests {
         let pdf = export_pdf(&[gray_page(1)], &PdfOptions::default());
         let s = String::from_utf8_lossy(&pdf);
         assert!(s.contains("/ColorSpace /DeviceGray"));
-        assert!(!s.contains("/ColorSpace /DeviceRGB"), "gray page must not say DeviceRGB");
+        assert!(
+            !s.contains("/ColorSpace /DeviceRGB"),
+            "gray page must not say DeviceRGB"
+        );
     }
 
     #[test]
@@ -587,7 +649,10 @@ mod tests {
         // A wide 2:1 image on Letter: the page turns landscape (792 × 612)
         // so the worksheet fills it; width binds at scale 792/400 = 1.98.
         let wide = DynamicImage::ImageRgb8(RgbImage::new(400, 200));
-        let options = PdfOptions { page_size: PageSize::Letter, ..Default::default() };
+        let options = PdfOptions {
+            page_size: PageSize::Letter,
+            ..Default::default()
+        };
         let pdf = export_pdf(&[wide], &options);
         let s = String::from_utf8_lossy(&pdf);
         assert!(s.contains("/MediaBox [0 0 792.00 612.00]"), "{s}");
@@ -633,12 +698,21 @@ mod tests {
     /// dpi 0 would put inf/NaN in the MediaBox; it must never leak through.
     #[test]
     fn zero_dpi_is_clamped_not_nan() {
-        let options = PdfOptions { dpi: 0, ..Default::default() };
+        let options = PdfOptions {
+            dpi: 0,
+            ..Default::default()
+        };
         let pdf = export_pdf(&[gray_page(1)], &options);
         let s = String::from_utf8_lossy(&pdf);
-        assert!(!s.contains("NaN") && !s.contains("inf"), "{s} contains a non-finite number");
+        assert!(
+            !s.contains("NaN") && !s.contains("inf"),
+            "{s} contains a non-finite number"
+        );
         // dpi clamps to 1: a 410 px page → 410 × 72 = 29520 pt.
-        assert!(s.contains("/MediaBox [0 0 29520.00 29520.00]"), "unexpected mediabox, dpi not clamped");
+        assert!(
+            s.contains("/MediaBox [0 0 29520.00 29520.00]"),
+            "unexpected mediabox, dpi not clamped"
+        );
     }
 
     // ===== 012: pass-through JPEG export =====
@@ -775,13 +849,17 @@ cb0cd31dc1b68f3410aa096da46533b87c65adeb1e22f1ef88bfe120f176b12eaba8b44908964554
 
         // Orientation 1 is identity: still embeds as-is.
         let straight = with_exif_orientation(&color_jpeg_bytes(), 1);
-        assert!(Jpeg::new(straight).is_ok(), "orientation 1 is not a transform");
+        assert!(
+            Jpeg::new(straight).is_ok(),
+            "orientation 1 is not a transform"
+        );
     }
 
     #[test]
     fn pages_export_rejects_zero_pages() {
         let mut sink = Vec::new();
-        let err = export_pdf_pages(std::iter::empty(), &PdfOptions::default(), &mut sink).unwrap_err();
+        let err =
+            export_pdf_pages(std::iter::empty(), &PdfOptions::default(), &mut sink).unwrap_err();
         assert_eq!("no pages", err);
     }
 
@@ -792,12 +870,18 @@ cb0cd31dc1b68f3410aa096da46533b87c65adeb1e22f1ef88bfe120f176b12eaba8b44908964554
         let pages = vec![gray_page(1), gray_page(3), gray_page(7)];
         let pdf = export_pdf(&pages, &PdfOptions::default());
 
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("target");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target");
         create_dir_all(&dir).unwrap();
         let path = dir.join("sample.pdf");
         File::create(&path).unwrap().write_all(&pdf).unwrap();
 
-        eprintln!("sample.pdf written to {:?} — {} bytes", path.canonicalize().unwrap(), pdf.len());
+        eprintln!(
+            "sample.pdf written to {:?} — {} bytes",
+            path.canonicalize().unwrap(),
+            pdf.len()
+        );
         assert!(pdf.len() > 1000, "3 pages of noise should make a real PDF");
     }
 

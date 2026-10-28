@@ -16,7 +16,9 @@ pub fn photos_dir() -> PathBuf {
 
 /// (index, path) of every `*_<n>.jpg`, sorted by n. Empty if the folder is absent.
 pub fn photos() -> Vec<(usize, PathBuf)> {
-    let Ok(rd) = std::fs::read_dir(photos_dir()) else { return vec![] };
+    let Ok(rd) = std::fs::read_dir(photos_dir()) else {
+        return vec![];
+    };
     let mut v: Vec<(usize, PathBuf)> = rd
         .filter_map(|e| {
             let p = e.ok()?.path();
@@ -42,20 +44,31 @@ pub fn load_oriented(path: &Path) -> DynamicImage {
 /// Labelled quads as fractions, by photo index.
 pub fn labels() -> std::collections::BTreeMap<usize, [(f32, f32); 4]> {
     let mut m = std::collections::BTreeMap::new();
-    let Ok(text) = std::fs::read_to_string(photos_dir().join("labels.tsv")) else { return m };
+    let Ok(text) = std::fs::read_to_string(photos_dir().join("labels.tsv")) else {
+        return m;
+    };
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let f: Vec<f32> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let f: Vec<f32> = line
+            .split_whitespace()
+            .filter_map(|t| t.parse().ok())
+            .collect();
         if f.len() == 9 {
-            m.insert(f[0] as usize, [(f[1], f[2]), (f[3], f[4]), (f[5], f[6]), (f[7], f[8])]);
+            m.insert(
+                f[0] as usize,
+                [(f[1], f[2]), (f[3], f[4]), (f[5], f[6]), (f[7], f[8])],
+            );
         }
     }
     m
 }
 
 pub fn to_quad(frac: &[(f32, f32); 4], w: u32, h: u32) -> Quad {
-    Quad(frac.map(|(x, y)| Point { x: x * w as f32, y: y * h as f32 }))
+    Quad(frac.map(|(x, y)| Point {
+        x: x * w as f32,
+        y: y * h as f32,
+    }))
 }

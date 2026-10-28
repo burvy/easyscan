@@ -23,7 +23,10 @@ fn main() {
     let photos = support::photos();
     let labels = support::labels();
     if photos.is_empty() || labels.is_empty() {
-        println!("no photos or labels in {}; nothing to measure", support::photos_dir().display());
+        println!(
+            "no photos or labels in {}; nothing to measure",
+            support::photos_dir().display()
+        );
         return;
     }
     println!("| photo | TL % | TR % | BR % | BL % | worst % | found | ms |");
@@ -59,9 +62,17 @@ fn main() {
             errs[0], errs[1], errs[2], errs[3], worst, det.found, ms
         );
         if verbose {
-            let f: Vec<String> = det.quad.0.iter().map(|p| format!("({:.3},{:.3})", p.x / w as f32, p.y / h as f32)).collect();
+            let f: Vec<String> = det
+                .quad
+                .0
+                .iter()
+                .map(|p| format!("({:.3},{:.3})", p.x / w as f32, p.y / h as f32))
+                .collect();
             println!("<!-- {n}: {} -->", f.join(" "));
         }
     }
-    println!("\n{pass}/{total} photos within 2.0% on every corner; mean worst-corner error {:.1}%", sum_worst / total.max(1) as f32);
+    println!(
+        "\n{pass}/{total} photos within 2.0% on every corner; mean worst-corner error {:.1}%",
+        sum_worst / total.max(1) as f32
+    );
 }
