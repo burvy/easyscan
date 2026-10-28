@@ -21,3 +21,8 @@
 # real test photos (private)
 /testdata/photos/
 /android/.kotlin/
+
+# Release signing (also ignored by android/.gitignore)
+android/key.properties
+*.jks
+*.keystore
