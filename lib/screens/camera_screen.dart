@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,6 +26,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   String? _error;
   bool _busy = false;
   bool _starting = false;
+  bool _flashOn = false;
+  int _flashId = 0;
 
   bool get _retaking => widget.retakeIndex != null;
 
@@ -96,9 +100,21 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
+  /// A brief white flash over the viewfinder to confirm a press. Never
+  /// awaited: it starts, holds for a beat, and fades out on its own
+  /// (a second press supersedes the first one's fade-out, never its rise).
+  void _pulseCaptureFlash() {
+    final id = ++_flashId;
+    setState(() => _flashOn = true);
+    Future<void>.delayed(const Duration(milliseconds: 80), () {
+      if (mounted && _flashId == id) setState(() => _flashOn = false);
+    });
+  }
+
   Future<void> _shoot() async {
     final c = _controller;
     if (c == null || _busy || !c.value.isInitialized) return;
+    _pulseCaptureFlash();
     setState(() => _busy = true);
     try {
       final shot = await c.takePicture();
@@ -146,7 +162,25 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       return const Center(child: CircularProgressIndicator());
     }
     return Column(children: [
-      Expanded(child: ClipRect(child: Center(child: CameraPreview(c)))),
+      Expanded(
+        child: ClipRect(
+          // The flash layer only confirms captures; IgnorePointer keeps it
+          // tap-through so it can never slow or block the shutter.
+          child: Stack(children: [
+            Center(child: CameraPreview(c)),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _flashOn ? 0.85 : 0,
+                  duration: const Duration(milliseconds: 150),
+                  curve: Curves.easeOut,
+                  child: const ColoredBox(color: Colors.white),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
       Container(
         color: Colors.black,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -167,12 +201,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               child: _retaking
                   ? Text('Retake page ${widget.retakeIndex! + 1}',
                       style: const TextStyle(color: Colors.white70))
-                  : ListenableBuilder(
-                      listenable: widget.session,
-                      builder: (_, _) => Text(
-                        '${widget.session.length} ${widget.session.length == 1 ? 'page' : 'pages'}',
-                        style: const TextStyle(color: Colors.white, fontSize: 16),
-                      ),
+                  : _LastPageButton(
+                      session: widget.session,
+                      // Capture mode is pushed directly over the page list.
+                      onTap: () => Navigator.of(context).pop(),
                     ),
             ),
           ),
@@ -180,6 +212,114 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       ),
     ]);
   }
+}
+
+/// The right-side control while capturing: a circular thumbnail of the
+/// newest page with the page count as a badge, tapping it returns to the
+/// page list. Thumbnails are rendered in the background after a capture,
+/// so until one exists the original photo is shown instead (the same
+/// fallback the page list uses).
+class _LastPageButton extends StatelessWidget {
+  const _LastPageButton({required this.session, required this.onTap});
+
+  final ScanSession session;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: session,
+        builder: (context, _) {
+          final pages = session.pages;
+          final last = pages.isEmpty ? null : pages.last;
+          final lastPath =
+              last == null ? null : (last.thumbPath ?? last.originalPath);
+          final count = pages.length;
+          return Semantics(
+            button: last != null,
+            label: last == null
+                ? 'No pages captured yet'
+                : 'Last page captured, $count ${count == 1 ? 'page' : 'pages'}. '
+                    'View the page list.',
+            child: GestureDetector(
+              onTap: last == null ? null : onTap,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 250),
+                      // Captures land under never-reused file names, so the
+                      // key changes per shot and the thumbnail crossfades in
+                      // without ever showing a cached older page.
+                      child: lastPath == null
+                          ? SizedBox(
+                              key: const ValueKey('empty'),
+                              width: 48,
+                              height: 48,
+                              child: ClipOval(
+                                child: ColoredBox(
+                                  color: Colors.white24,
+                                  child: Icon(Icons.photo_camera_outlined,
+                                      size: 22, color: Colors.white70),
+                                ),
+                              ),
+                            )
+                          : SizedBox(
+                              key: ValueKey(lastPath),
+                              width: 48,
+                              height: 48,
+                              child: ClipOval(
+                                child: ColoredBox(
+                                  color: Colors.white24,
+                                  child: Image.file(
+                                    File(lastPath),
+                                    // Decode small: a full 12 MP bitmap per
+                                    // shot is pointless work between presses.
+                                    cacheWidth: 168,
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                    errorBuilder: (_, _, _) => const Icon(
+                                        Icons.broken_image_outlined,
+                                        size: 22,
+                                        color: Colors.white70),
+                                  ),
+                                ),
+                              ),
+                            ),
+                    ),
+                  ),
+                  if (last != null)
+                    Positioned(
+                      top: -4,
+                      right: -6,
+                      child: ExcludeSemantics(
+                        child: Container(
+                          constraints:
+                              const BoxConstraints(minWidth: 16, minHeight: 16),
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primary,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '$count',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
 }
 
 class _ShutterButton extends StatelessWidget {
