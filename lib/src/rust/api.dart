@@ -7,8 +7,8 @@ import 'frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `encode_jpeg_img`, `load_oriented`, `rotate_quarters`, `to_filter`, `to_page_size`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `eq`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `encode_jpeg_img`, `load_oriented`, `rotate_quarters`, `to_filter`, `to_page_size`, `to_stroke`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`
 
 /// Version of the Rust core, to prove the bridge is wired up.
 String coreVersion() => RustLib.instance.api.crateApiCoreVersion();
@@ -36,14 +36,17 @@ Future<PageDetection> detectPageFile({
 ///
 /// Order of operations: EXIF orientation, `rotation_quarters` clockwise
 /// quarter-turns, perspective warp with `corners` (TL, TR, BR, BL in the
-/// oriented *and* rotated frame), `filter`, downscale to fit
-/// `max_long_side` (aspect kept; `None` = full resolution), JPEG encode at
-/// `jpeg_quality`, write to `out_path`. Returns the written size.
+/// oriented *and* rotated frame), annotation `strokes` stamped in the
+/// warped frame, `filter`, downscale to fit `max_long_side` (aspect kept;
+/// `None` = full resolution), JPEG encode at `jpeg_quality`, write to
+/// `out_path`. Returns the written size. No strokes = byte-for-byte the
+/// same page as today.
 Future<ImageSize> processPageFile({
   required String srcPath,
   required List<Corner> corners,
   required ScanFilter filter,
   required int rotationQuarters,
+  List<StrokeSpec>? strokes,
   required String outPath,
   int? maxLongSide,
   required int jpegQuality,
@@ -52,6 +55,7 @@ Future<ImageSize> processPageFile({
   corners: corners,
   filter: filter,
   rotationQuarters: rotationQuarters,
+  strokes: strokes,
   outPath: outPath,
   maxLongSide: maxLongSide,
   jpegQuality: jpegQuality,
@@ -153,3 +157,37 @@ enum PdfPageSize {
 }
 
 enum ScanFilter { original, grayscale, enhance, blackWhite }
+
+/// One annotation stroke over the page.
+///
+/// `points` are flat x, y pairs normalized to [0..1]² of the warped result
+/// frame (the corners' frame); `width` is the line thickness as a fraction
+/// of the frame's short side. `tool`: 0 = pen, 1 = white-out. `color` packs
+/// opaque ARGB (the alpha byte is ignored; strokes draw fully opaque).
+class StrokeSpec {
+  final int tool;
+  final int color;
+  final double width;
+  final Float64List points;
+
+  const StrokeSpec({
+    required this.tool,
+    required this.color,
+    required this.width,
+    required this.points,
+  });
+
+  @override
+  int get hashCode =>
+      tool.hashCode ^ color.hashCode ^ width.hashCode ^ points.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StrokeSpec &&
+          runtimeType == other.runtimeType &&
+          tool == other.tool &&
+          color == other.color &&
+          width == other.width &&
+          points == other.points;
+}

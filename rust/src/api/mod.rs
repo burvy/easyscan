@@ -4,7 +4,7 @@
 //! EXIF orientation applied at every decode edge. (The byte-based task 007
 //! API that round-tripped 12MP PNGs through FFI was removed in task 012.)
 
-use easyscan_core::{detect, filter, pdf};
+use easyscan_core::{detect, draw, filter, pdf};
 use image::codecs::jpeg::JpegEncoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageReader};
@@ -54,6 +54,36 @@ pub enum PdfPageSize {
 pub struct ImageSize {
     pub width: u32,
     pub height: u32,
+}
+
+/// One annotation stroke over the page.
+///
+/// `points` are flat x, y pairs normalized to [0..1]² of the warped result
+/// frame (the corners' frame); `width` is the line thickness as a fraction
+/// of the frame's short side. `tool`: 0 = pen, 1 = white-out. `color` packs
+/// opaque ARGB (the alpha byte is ignored; strokes draw fully opaque).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrokeSpec {
+    pub tool: u32,
+    pub color: u32,
+    pub width: f64,
+    pub points: Vec<f64>,
+}
+
+/// ARGB int -> opaque sRGB, with unknown tools rejected (None = skip).
+fn to_stroke(spec: StrokeSpec) -> Option<draw::Stroke> {
+    let tool = match spec.tool {
+        0 => draw::Tool::Pen,
+        1 => draw::Tool::Whiteout,
+        _ => return None,
+    };
+    let [_, r, g, b] = spec.color.to_be_bytes();
+    Some(draw::Stroke {
+        tool,
+        color: [r, g, b],
+        width: spec.width,
+        points: spec.points,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +144,10 @@ pub fn image_size_file(path: String) -> Result<ImageSize, String> {
     let (w, h) = decoder.dimensions();
     // Only quarter-turn orientations swap the axes; flips keep them.
     let (width, height) = match decoder.orientation().map_err(|e| format!("{path}: {e}"))? {
-        Orientation::Rotate90 | Orientation::Rotate270
-        | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH => (h, w),
+        Orientation::Rotate90
+        | Orientation::Rotate270
+        | Orientation::Rotate90FlipH
+        | Orientation::Rotate270FlipH => (h, w),
         _ => (w, h),
     };
     Ok(ImageSize { width, height })
@@ -143,25 +175,47 @@ pub fn detect_page_file(src_path: String, rotation_quarters: u32) -> Result<Page
 ///
 /// Order of operations: EXIF orientation, `rotation_quarters` clockwise
 /// quarter-turns, perspective warp with `corners` (TL, TR, BR, BL in the
-/// oriented *and* rotated frame), `filter`, downscale to fit
-/// `max_long_side` (aspect kept; `None` = full resolution), JPEG encode at
-/// `jpeg_quality`, write to `out_path`. Returns the written size.
+/// oriented *and* rotated frame), annotation `strokes` stamped in the
+/// warped frame, `filter`, downscale to fit `max_long_side` (aspect kept;
+/// `None` = full resolution), JPEG encode at `jpeg_quality`, write to
+/// `out_path`. Returns the written size. No strokes = byte-for-byte the
+/// same page as today.
+///
+/// The parallel page inputs make this the one exception to the 7-argument
+/// comfort limit; the Dart side always calls it with named arguments.
+#[allow(clippy::too_many_arguments)]
 pub fn process_page_file(
     src_path: String,
     corners: Vec<Corner>,
     filter: ScanFilter,
     rotation_quarters: u32,
+    strokes: Option<Vec<StrokeSpec>>,
     out_path: String,
     max_long_side: Option<u32>,
     jpeg_quality: u32,
 ) -> Result<ImageSize, String> {
-    let [a, b, c, d]: [Corner; 4] = corners.try_into().map_err(|_| "need 4 corners".to_string())?;
+    let [a, b, c, d]: [Corner; 4] = corners
+        .try_into()
+        .map_err(|_| "need 4 corners".to_string())?;
     let pt = |p: Corner| detect::Point { x: p.x, y: p.y };
     let quad = detect::Quad([pt(a), pt(b), pt(c), pt(d)]);
+    let strokes: Vec<draw::Stroke> = strokes
+        .unwrap_or_default()
+        .drain(..)
+        .filter_map(to_stroke)
+        .collect();
 
     let img = load_oriented(&src_path)?;
     let img = rotate_quarters(img, rotation_quarters);
     let warped = detect::warp(&img, &quad);
+    // Strokes live in the warp's output frame and are stamped before the
+    // filter, so the filter decides how they render (pen ink binarizes,
+    // white-out binarizes back to paper). Empty = exactly today's bytes.
+    let warped = if strokes.is_empty() {
+        warped
+    } else {
+        draw::apply(&warped, &strokes)
+    };
     let filtered = easyscan_core::filter::apply(&warped, to_filter(filter));
     let sized = match max_long_side {
         Some(limit) if filtered.width().max(filtered.height()) > limit => {
@@ -171,7 +225,10 @@ pub fn process_page_file(
     };
     let jpeg = encode_jpeg_img(&sized, jpeg_quality)?;
     std::fs::write(&out_path, jpeg).map_err(|e| format!("{out_path}: {e}"))?;
-    Ok(ImageSize { width: sized.width(), height: sized.height() })
+    Ok(ImageSize {
+        width: sized.width(),
+        height: sized.height(),
+    })
 }
 
 /// One PDF from ordered page-image paths, written to `out_path`.
@@ -211,8 +268,12 @@ pub fn export_pdf_file(
         ..pdf::PdfOptions::default()
     };
     let file = std::fs::File::create(&out_path).map_err(|e| format!("{out_path}: {e}"))?;
-    pdf::export_pdf_pages(inputs.into_iter(), &options, &mut std::io::BufWriter::new(file))
-        .map_err(|e| format!("{out_path}: {e}"))?;
+    pdf::export_pdf_pages(
+        inputs.into_iter(),
+        &options,
+        &mut std::io::BufWriter::new(file),
+    )
+    .map_err(|e| format!("{out_path}: {e}"))?;
     Ok(())
 }
 
@@ -236,9 +297,14 @@ mod tests {
         // Entry: tag 0x0112 (Orientation), type 3 (SHORT), count 1, value
         // big-endian in the first two of the four inline value bytes.
         tiff.extend_from_slice(&[
-            0x01, 0x12, // tag
-            0x00, 0x03, // type SHORT
-            0, 0, 0, 1, // count
+            0x01,
+            0x12, // tag
+            0x00,
+            0x03, // type SHORT
+            0,
+            0,
+            0,
+            1, // count
             (orientation >> 8) as u8,
             (orientation & 0xFF) as u8,
             0,
@@ -265,7 +331,11 @@ mod tests {
         let mut img = image::RgbImage::from_fn(40, 20, |x, y| {
             let page = y > 11 && (3..=36).contains(&x);
             let dark = (((x * 7 + y * 13) % 60) + 40) as u8;
-            if page { image::Rgb([250, 250, 250]) } else { image::Rgb([dark, dark, dark]) }
+            if page {
+                image::Rgb([250, 250, 250])
+            } else {
+                image::Rgb([dark, dark, dark])
+            }
         });
         let mut jpeg = Vec::new();
         JpegEncoder::new_with_quality(&mut jpeg, 90)
@@ -285,14 +355,21 @@ mod tests {
         let path = temp_file("easyscan_rot6.jpg", &sideways_page_jpeg(6));
 
         let size = image_size_file(path.display().to_string()).unwrap();
-        assert_eq!((20, 40), (size.width, size.height), "orientation must swap the axes");
+        assert_eq!(
+            (20, 40),
+            (size.width, size.height),
+            "orientation must swap the axes"
+        );
 
         let detected = detect_page_file(path.display().to_string(), 0).unwrap();
         assert!(detected.found, "the page should be détectable");
         // The page sits along the LEFT of the oriented frame; if the EXIF
         // rotation had been ignored the bright band would be at the bottom.
         assert!(
-            detected.corners.iter().all(|c| c.x >= 0.0 && c.x <= 9.0 && c.y >= 0.0 && c.y <= 40.0),
+            detected
+                .corners
+                .iter()
+                .all(|c| c.x >= 0.0 && c.x <= 9.0 && c.y >= 0.0 && c.y <= 40.0),
             "corners must be in the oriented frame: {:?}",
             detected.corners
         );
@@ -313,12 +390,17 @@ mod tests {
             ],
             ScanFilter::Original,
             0,
+            None,
             out.display().to_string(),
             None,
             80,
         )
         .unwrap();
-        assert_eq!((20, 40), (size.width, size.height), "an upright page, not the sideways 40×20");
+        assert_eq!(
+            (20, 40),
+            (size.width, size.height),
+            "an upright page, not the sideways 40×20"
+        );
         let written = image::open(&out).unwrap();
         assert_eq!((20, 40), (written.width(), written.height()));
         std::fs::remove_file(&src).unwrap();
@@ -327,19 +409,16 @@ mod tests {
 
     #[test]
     fn process_page_downscales_and_rotates() {
-        let src = temp_file(
-            "easyscan_plain.jpg",
-            &{
-                let img = image::RgbImage::from_fn(120, 60, |x, y| {
-                    image::Rgb([(x % 255) as u8, (y % 255) as u8, 128])
-                });
-                let mut jpeg = Vec::new();
-                JpegEncoder::new_with_quality(&mut jpeg, 90)
-                    .encode_image(&DynamicImage::ImageRgb8(img))
-                    .unwrap();
-                jpeg
-            },
-        );
+        let src = temp_file("easyscan_plain.jpg", &{
+            let img = image::RgbImage::from_fn(120, 60, |x, y| {
+                image::Rgb([(x % 255) as u8, (y % 255) as u8, 128])
+            });
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, 90)
+                .encode_image(&DynamicImage::ImageRgb8(img))
+                .unwrap();
+            jpeg
+        });
         let out = std::env::temp_dir().join("easyscan_down_out.jpg");
         let size = process_page_file(
             src.display().to_string(),
@@ -353,32 +432,148 @@ mod tests {
             ],
             ScanFilter::Grayscale,
             1, // one clockwise quarter-turn of the landscape source
+            None,
             out.display().to_string(),
             Some(40),
             75,
         )
         .unwrap();
-        assert_eq!((20, 40), (size.width, size.height), "rotated then fitted to a 40-long-side limit");
+        assert_eq!(
+            (20, 40),
+            (size.width, size.height),
+            "rotated then fitted to a 40-long-side limit"
+        );
         std::fs::remove_file(&src).unwrap();
         std::fs::remove_file(&out).unwrap();
+    }
+
+    /// A process call with no strokes (neither `None` nor an empty list)
+    /// must produce exactly the page bytes that the pre-strokes pipeline
+    /// produces, so unannotated pages keep their byte-level stability.
+    #[test]
+    fn empty_strokes_are_byte_identical_to_no_strokes() {
+        let src = temp_file("easyscan_draw_plain.jpg", &{
+            let img = RgbImage::from_fn(120, 60, |x, y| {
+                Rgb([((x * 11 + y * 3) % 200 + 40) as u8, (y % 255) as u8, 128])
+            });
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, 90)
+                .encode_image(&DynamicImage::ImageRgb8(img))
+                .unwrap();
+            jpeg
+        });
+        let corners = vec![
+            Corner { x: 0.0, y: 0.0 },
+            Corner { x: 119.0, y: 0.0 },
+            Corner { x: 119.0, y: 59.0 },
+            Corner { x: 0.0, y: 59.0 },
+        ];
+        let run = |strokes: Option<Vec<StrokeSpec>>, name: &str| {
+            let out = std::env::temp_dir().join(name);
+            process_page_file(
+                src.display().to_string(),
+                corners.clone(),
+                ScanFilter::Enhance,
+                0,
+                strokes,
+                out.display().to_string(),
+                None,
+                90,
+            )
+            .unwrap();
+            std::fs::read(&out).unwrap()
+        };
+        let none = run(None, "easyscan_draw_none.jpg");
+        let empty = run(Some(vec![]), "easyscan_draw_empty.jpg");
+        assert_eq!(none, empty, "an empty stroke list changes nothing");
+        std::fs::remove_file(&src).unwrap();
+        std::fs::remove_file(&std::env::temp_dir().join("easyscan_draw_none.jpg")).unwrap();
+        std::fs::remove_file(&std::env::temp_dir().join("easyscan_draw_empty.jpg")).unwrap();
+    }
+
+    #[test]
+    fn strokes_burn_onto_the_rendered_page() {
+        let src = temp_file("easyscan_draw_src.jpg", &{
+            let img = RgbImage::from_pixel(120, 60, Rgb([240, 240, 240]));
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, 95)
+                .encode_image(&DynamicImage::ImageRgb8(img))
+                .unwrap();
+            jpeg
+        });
+        let out = std::env::temp_dir().join("easyscan_draw_burned.jpg");
+        let size = process_page_file(
+            src.display().to_string(),
+            vec![
+                Corner { x: 0.0, y: 0.0 },
+                Corner { x: 119.0, y: 0.0 },
+                Corner { x: 119.0, y: 59.0 },
+                Corner { x: 0.0, y: 59.0 },
+            ],
+            ScanFilter::Original,
+            0,
+            Some(vec![StrokeSpec {
+                tool: 0,           // pen
+                color: 0xFF141414, // near-black
+                width: 0.2,
+                points: vec![0.25, 0.5, 0.75, 0.5],
+            }]),
+            out.display().to_string(),
+            None,
+            90,
+        )
+        .unwrap();
+        // The warp output spans the corners: 119 x 59, not 120 x 60.
+        assert_eq!((119, 59), (size.width, size.height));
+        let rendered = image::open(&out).unwrap();
+        // The result frame's centre must be inked (JPEG round trip keeps
+        // an opaque dark band well away from the pale paper).
+        let px = rendered.to_rgb8().get_pixel(60, 30).0;
+        assert!(
+            px[0] < 100 && px[1] < 100 && px[2] < 100,
+            "the pen stroke must be burned in: {px:?}"
+        );
+        // And the same page without strokes stays pale paper.
+        let plain = std::env::temp_dir().join("easyscan_draw_burnplain.jpg");
+        process_page_file(
+            src.display().to_string(),
+            vec![
+                Corner { x: 0.0, y: 0.0 },
+                Corner { x: 119.0, y: 0.0 },
+                Corner { x: 119.0, y: 59.0 },
+                Corner { x: 0.0, y: 59.0 },
+            ],
+            ScanFilter::Original,
+            0,
+            None,
+            plain.display().to_string(),
+            None,
+            90,
+        )
+        .unwrap();
+        let px = image::open(&plain).unwrap().to_rgb8().get_pixel(60, 30).0;
+        assert!(
+            px[0] > 200,
+            "unannotated page stays paper at the centre: {px:?}"
+        );
+        std::fs::remove_file(&src).unwrap();
+        std::fs::remove_file(&out).unwrap();
+        std::fs::remove_file(&plain).unwrap();
     }
 
     #[test]
     fn export_pdf_file_writes_a_real_pdf() {
         let src1 = temp_file("easyscan_pdf1.jpg", &sideways_page_jpeg(6));
-        let src2 = temp_file(
-            "easyscan_pdf2.jpg",
-            &{
-                let img = image::RgbImage::from_fn(80, 60, |x, y| {
-                    image::Rgb([(x + y) as u8, (x.max(y)) as u8, 200])
-                });
-                let mut jpeg = Vec::new();
-                JpegEncoder::new_with_quality(&mut jpeg, 90)
-                    .encode_image(&image::DynamicImage::ImageRgb8(img))
-                    .unwrap();
-                jpeg
-            },
-        );
+        let src2 = temp_file("easyscan_pdf2.jpg", &{
+            let img = image::RgbImage::from_fn(80, 60, |x, y| {
+                image::Rgb([(x + y) as u8, (x.max(y)) as u8, 200])
+            });
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, 90)
+                .encode_image(&image::DynamicImage::ImageRgb8(img))
+                .unwrap();
+            jpeg
+        });
         let out = std::env::temp_dir().join("easyscan_export.pdf");
         export_pdf_file(
             vec![src1.display().to_string(), src2.display().to_string()],
@@ -400,17 +595,14 @@ mod tests {
     #[test]
     fn export_pdf_file_embeds_processed_jpegs_as_is() {
         // Produce a real processed page (plain JPEG, no EXIF) and export it.
-        let src = temp_file(
-            "easyscan_pass_src.jpg",
-            &{
-                let img = RgbImage::from_fn(60, 40, |x, y| Rgb([(x * 5 + y) as u8, (y * 7) as u8, 90]));
-                let mut jpeg = Vec::new();
-                JpegEncoder::new_with_quality(&mut jpeg, 90)
-                    .encode_image(&DynamicImage::ImageRgb8(img))
-                    .unwrap();
-                jpeg
-            },
-        );
+        let src = temp_file("easyscan_pass_src.jpg", &{
+            let img = RgbImage::from_fn(60, 40, |x, y| Rgb([(x * 5 + y) as u8, (y * 7) as u8, 90]));
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, 90)
+                .encode_image(&DynamicImage::ImageRgb8(img))
+                .unwrap();
+            jpeg
+        });
         let bytes = std::fs::read(&src).unwrap();
         let out = std::env::temp_dir().join("easyscan_pass.pdf");
         export_pdf_file(
@@ -440,22 +632,29 @@ mod tests {
     fn export_pdf_timing_20_pages() {
         let img = RgbImage::from_fn(4000, 3000, |x, y| {
             let page = (600..3400).contains(&x) && (300..2700).contains(&y);
-            if page { Rgb([248, 248, 246]) } else { Rgb([70, 70, 70]) }
+            if page {
+                Rgb([248, 248, 246])
+            } else {
+                Rgb([70, 70, 70])
+            }
         });
-        let src = temp_file(
-            "easyscan_20p_src.jpg",
-            &{
-                let mut jpeg = Vec::new();
-                JpegEncoder::new_with_quality(&mut jpeg, 85)
-                    .encode_image(&DynamicImage::ImageRgb8(img))
-                    .unwrap();
-                jpeg
-            },
-        );
+        let src = temp_file("easyscan_20p_src.jpg", &{
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, 85)
+                .encode_image(&DynamicImage::ImageRgb8(img))
+                .unwrap();
+            jpeg
+        });
         let out = std::env::temp_dir().join("easyscan_20p.pdf");
         let start = Instant::now();
         let paths: Vec<String> = (0..20).map(|_| src.display().to_string()).collect();
-        export_pdf_file(paths, out.display().to_string(), PdfPageSize::FitToImage, 80).unwrap();
+        export_pdf_file(
+            paths,
+            out.display().to_string(),
+            PdfPageSize::FitToImage,
+            80,
+        )
+        .unwrap();
         let secs = start.elapsed();
         let pdf_len = std::fs::metadata(&out).unwrap().len();
         eprintln!(
@@ -475,7 +674,11 @@ mod tests {
             let page = (600..3400).contains(&x) && (300..2700).contains(&y);
             let noise = ((x / 13 % 4 == 0) as u8) * 10;
             let dark = 60 + noise;
-            if page { image::Rgb([248, 248, 246]) } else { image::Rgb([dark, dark, dark]) }
+            if page {
+                image::Rgb([248, 248, 246])
+            } else {
+                image::Rgb([dark, dark, dark])
+            }
         });
         let mut jpeg = Vec::new();
         JpegEncoder::new_with_quality(&mut jpeg, 85)
@@ -492,7 +695,10 @@ mod tests {
         let decode_start = Instant::now();
         let detection = detect_page_file(src.display().to_string(), 0).unwrap();
         let detect_s = decode_start.elapsed().as_secs_f32();
-        eprintln!("12MP detect+decode:      {detect_s:.3} s (found {} conf {:.2})", detection.found, detection.confidence);
+        eprintln!(
+            "12MP detect+decode:      {detect_s:.3} s (found {} conf {:.2})",
+            detection.found, detection.confidence
+        );
 
         let proc_start = Instant::now();
         let size = process_page_file(
@@ -500,19 +706,31 @@ mod tests {
             detection.corners.clone(),
             ScanFilter::Grayscale,
             0,
+            None,
             out.display().to_string(),
             None,
             80,
         )
         .unwrap();
         let process_s = proc_start.elapsed().as_secs_f32();
-        eprintln!("12MP process full-res:   {process_s:.3} s -> {}×{} JPEG at {:?}", size.width, size.height, out.display());
-        eprintln!("12MP detect+process:     {:.3} s (target < 1.5 s)", detect_s + process_s);
+        eprintln!(
+            "12MP process full-res:   {process_s:.3} s -> {}×{} JPEG at {:?}",
+            size.width,
+            size.height,
+            out.display()
+        );
+        eprintln!(
+            "12MP detect+process:     {:.3} s (target < 1.5 s)",
+            detect_s + process_s
+        );
 
         let pdf_start = Instant::now();
         export_pdf_file(
             vec![src.display().to_string()],
-            std::env::temp_dir().join("easyscan_bench.pdf").display().to_string(),
+            std::env::temp_dir()
+                .join("easyscan_bench.pdf")
+                .display()
+                .to_string(),
             PdfPageSize::FitToImage,
             80,
         )
