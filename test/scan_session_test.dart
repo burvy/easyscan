@@ -63,6 +63,13 @@ void main() {
     expect(await session.listScans(), isEmpty);
   });
 
+  test('a stored scan with no pages is removed on launch', () async {
+    writeScan(Directory('${root.path}/pages'), pages: 0);
+    final session = await ScanSession.create(root);
+    expect(session.length, 0);
+    expect(Directory('${root.path}/scans').listSync().whereType<Directory>(), isEmpty);
+  });
+
   test('new, open and delete keep scans apart', () async {
     writeScan(Directory('${root.path}/pages'), pages: 1);
     final session = await ScanSession.create(root);

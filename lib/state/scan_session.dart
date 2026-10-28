@@ -115,7 +115,11 @@ class ScanSession extends ChangeNotifier {
     } on FileSystemException {
       // No current scan yet.
     }
-    if (session._pages.isEmpty) session._startFresh();
+    if (session._pages.isEmpty) {
+      // Nothing worth keeping (e.g. every page was deleted before a kill).
+      session._deleteFolder(session._path);
+      session._startFresh();
+    }
     return session;
   }
 
@@ -257,6 +261,21 @@ class ScanSession extends ChangeNotifier {
   void rename(String name) {
     _name = name.trim();
     notifyListeners();
+  }
+
+  /// Renames a stored scan; the open one is renamed with [rename].
+  Future<void> renameScan(String id, String name) async {
+    if (id == _id) return rename(name);
+    try {
+      final file = File('${_scansDir.path}/$id/$_stateFile');
+      final json = jsonDecode(await file.readAsString()) as Map;
+      json['name'] = name.trim();
+      final tmp = File('${file.path}.tmp');
+      await tmp.writeAsString(jsonEncode(json), flush: true);
+      await tmp.rename(file.path);
+    } on Exception {
+      // Unreadable scan: leave it alone.
+    }
   }
 
   /// Every stored scan with at least one page, newest first. The open scan is
