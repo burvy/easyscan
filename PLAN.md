@@ -9,10 +9,10 @@
 - 009 camera capture + page list: reorder, retake, delete (Sonnet)
 - 010 crop handles + filter picker (after 008 and 009)
 - 011 export PDF + share: done
-- 004 detection on light backgrounds: done (7/9 within 2%)
-- 005 filter tuning: done; 014 B&W drops ruled lines: done (highlighter still untested)
+- 004 detection on light backgrounds: done (10/12 within 2%)
+- 005 filter tuning: done; 014 B&W drops ruled lines: done (no highlighter to test; faint rule stubs accepted)
 - 015 keep the current scan across app restarts (Sonnet)
-- 013 big zoomable page view + original toggle + retake (Haiku)
+- 013 big zoomable page view + original toggle + retake: done
 
 ## Next groups
 - G4 ads: single AdMob banner + UMP consent (13+ audience).
