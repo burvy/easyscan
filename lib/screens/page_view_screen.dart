@@ -96,12 +96,6 @@ class _PageViewScreenState extends State<PageViewScreen> {
       _zoom.value = Matrix4.identity();
       _result = _renderResult();
     });
-    // Renders of the page just left are not needed again.
-    final stale = List.of(_rendered);
-    _rendered.clear();
-    for (final path in stale) {
-      _evictAndDelete(path);
-    }
   }
 
   Future<void> _retake() async {
@@ -250,12 +244,16 @@ class _PageViewScreenState extends State<PageViewScreen> {
   }
 
   Widget _resultView() => FutureBuilder<String>(
+        key: ValueKey(_pageId),
         future: _result,
         builder: (context, snap) {
           if (snap.hasError) {
             return const Center(child: Text('This photo could not be processed.'));
           }
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          // Not the previous snapshot's data: it is another page's render.
+          if (snap.connectionState != ConnectionState.done || !snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
           return _zoomable(Image.file(File(snap.data!), fit: BoxFit.contain, gaplessPlayback: true));
         },
       );
