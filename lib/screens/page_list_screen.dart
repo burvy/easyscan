@@ -105,18 +105,12 @@ class PageListScreen extends StatelessWidget {
               title: const Text('EasyScan'),
               actions: [
                 TextButton(
+                  onPressed: pages.isEmpty ? null : () => _confirmNewScan(context),
+                  child: const Text('New scan'),
+                ),
+                TextButton(
                   onPressed: pages.isEmpty ? null : () => showExportDialog(context, session),
                   child: const Text('Export'),
-                ),
-                PopupMenuButton<String>(
-                  onSelected: (_) => _confirmNewScan(context),
-                  itemBuilder: (_) => [
-                    PopupMenuItem<String>(
-                      value: 'new',
-                      enabled: pages.isNotEmpty,
-                      child: const Text('New scan'),
-                    ),
-                  ],
                 ),
               ],
             ),

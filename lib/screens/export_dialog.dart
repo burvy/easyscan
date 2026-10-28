@@ -15,13 +15,34 @@ class _ExportChoices {
 }
 
 /// Asks for a file name, page size and quality, exports the pages in order,
-/// then opens the share sheet with the PDF.
-Future<void> showExportDialog(BuildContext context, ScanSession session) {
-  return showDialog<void>(
+/// then opens the share sheet with the PDF. Once the share sheet closes, offers
+/// to start a new scan.
+Future<void> showExportDialog(BuildContext context, ScanSession session) async {
+  final shared = await showDialog<bool>(
     context: context,
     barrierDismissible: false,
     builder: (_) => _ExportDialog(session: session),
   );
+  if (shared == true && context.mounted) await _offerNewScan(context, session);
+}
+
+/// The PDF is already out; clearing is the user's choice, not a side effect.
+Future<void> _offerNewScan(BuildContext context, ScanSession session) async {
+  final start = await showDialog<bool>(
+    context: context,
+    builder: (dialog) => AlertDialog(
+      title: const Text('Start a new scan?'),
+      content: const Text('Your PDF is exported. Clear these pages to start a new scan?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Keep pages')),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialog, true),
+          child: const Text('Start a new scan'),
+        ),
+      ],
+    ),
+  );
+  if (start == true) session.clear();
 }
 
 class _ExportDialog extends StatefulWidget {
@@ -42,6 +63,8 @@ class _ExportDialogState extends State<_ExportDialog> {
   // Progress of a running export: null while idle.
   int? _done;
   int? _total;
+  // True while the share sheet is open; the dialog stays until it closes.
+  bool _sharing = false;
 
   bool get _busy => _done != null;
 
@@ -76,13 +99,15 @@ class _ExportDialogState extends State<_ExportDialog> {
         },
       );
       if (!mounted) return;
-      Navigator.pop(context);
+      setState(() => _sharing = true);
       await _share(file);
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _done = null;
         _total = null;
+        _sharing = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Export failed: $e')),
@@ -105,7 +130,11 @@ class _ExportDialogState extends State<_ExportDialog> {
       title: const Text('Export PDF'),
       content: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (_busy) ...[
+          if (_sharing) ...[
+            const LinearProgressIndicator(),
+            const SizedBox(height: 8),
+            const Text('Sharing the PDF...'),
+          ] else if (_busy) ...[
             LinearProgressIndicator(value: progress),
             const SizedBox(height: 8),
             Text('Preparing page ${(_done! + 1).clamp(1, widget.session.length)} '
