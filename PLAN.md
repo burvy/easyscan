@@ -9,7 +9,8 @@
 - G4 ads groundwork: 023 AdMob banner + UMP consent (test IDs; fixed 320x50 banner on the page list).
 
 ## Focus now: G5 release prep
-- Real AdMob IDs (needs burvy's AdMob account) -> lib/ads/ad_ids.dart + manifest.
-- App icon + display name, release signing (upload key, kept safe by burvy), versioning.
-- Privacy policy (ads + camera, no accounts, all offline) + Play Data safety form.
-- Play Console walkthrough with burvy: closed test (12 testers x 14 days), content rating (13+), ads declaration.
+- 028 app icon (page with corner fold; burvy approves) - Sonnet2.
+- 029 release signing (upload key owned by burvy, key.properties gitignored) + first release build on the phone - Sonnet.
+- 030 privacy policy on GitHub Pages (docs/) + Data safety answers - Sonnet, after 029.
+- 031 real AdMob app + banner IDs - blocked on burvy sending the IDs (ask 020).
+- Then: Play Console walkthrough with burvy (closed test 12 testers x 14 days if personal account, content rating 13+, ads declaration, store listing + screenshots).
