@@ -65,10 +65,15 @@ group('ScanPage persistence', () {
     expect(back.imageSize, const Size(400, 300));
   });
 
-  test('missing original skips the page; missing working copy drops derived data', () {
+  test('missing original skips the page; missing working copy keeps the crop', () {
     expect(ScanPageJson.fromJson(page.toJson(), '/b', (p) => false), isNull);
     final back = ScanPageJson.fromJson(page.toJson(), '/b', (p) => !p.contains('_w'))!;
     expect(back.isPrepared, isFalse);
+    expect(back.workingPath, isNull);
+    expect(back.workingSize, isNull);
+    expect(back.corners, quad);
+    expect(back.imageSize, const Size(400, 300));
+    expect(back.detectedCorners, quad);
     expect(back.filter, PageFilter.blackWhite);
   });
 

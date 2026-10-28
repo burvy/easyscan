@@ -23,17 +23,72 @@ bridge.ScanFilter toBridgeFilter(PageFilter f) => switch (f) {
 List<bridge.Corner> toBridgeCorners(List<Offset> c) =>
     [for (final p in c) bridge.Corner(x: p.dx, y: p.dy)];
 
-/// The pages of the current scan, in export order. There is exactly one scan
-/// in progress; it is saved next to its photos (`state.json`) after every
-/// change and restored on launch, so it survives the app being killed.
+/// Lists a stored scan in the history screen.
+class ScanSummary {
+  ScanSummary({
+    required this.id,
+    required this.name,
+    required this.created,
+    required this.updated,
+    required this.pageCount,
+    required this.thumbPath,
+    required this.bytes,
+    required this.isCurrent,
+  });
+
+  final String id;
+  final String name;
+  final DateTime created;
+  final DateTime updated;
+  final int pageCount;
+
+  /// First page's thumbnail, or its original photo if there is none.
+  final String? thumbPath;
+  final int bytes;
+  final bool isCurrent;
+}
+
+/// "Scan 27 Oct 14:32": the name a scan has until the user renames it.
+String defaultScanName(DateTime t) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  String two(int n) => n.toString().padLeft(2, '0');
+  return 'Scan ${t.day} ${months[t.month - 1]} ${two(t.hour)}:${two(t.minute)}';
+}
+
+String _newId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+String _baseName(String path) => path.split(RegExp(r'[\\/]')).last;
+
+/// The scans on disk: `scans/<id>/` folders, each with its own `state.json`
+/// and photos, and `scans/current` naming the open one. One scan is open at a
+/// time (the "current scan"): its pages are in memory, saved next to its
+/// photos after every change and restored on launch, so it survives the app
+/// being killed. Other scans stay on disk and are opened with [openScan].
+///
+/// A scan's folder is created when its first photo arrives, so a scan nobody
+/// added to never appears in history.
 class ScanSession extends ChangeNotifier {
-  ScanSession._(this._dir);
+  ScanSession._(this._scansDir);
 
   static const _stateFile = 'state.json';
+  static const _currentFile = 'current';
 
-  final Directory _dir;
+  final Directory _scansDir;
   final List<ScanPage> _pages = [];
   int _counter = 0;
+
+  String _id = _newId();
+  String _name = ''; // empty: show the default name
+  int _created = DateTime.now().millisecondsSinceEpoch;
+
+  /// Bumped whenever another scan is loaded, so that work started for the
+  /// previous one (preparation, thumbnails) can tell it is stale.
+  int _gen = 0;
+
+  String get _path => '${_scansDir.path}/$_id';
+
+  String get currentId => _id;
+  String get name => _name.isEmpty ? defaultScanName(DateTime.fromMillisecondsSinceEpoch(_created)) : _name;
 
   /// Filter given to newly captured pages: the one chosen most recently. Kept
   /// with the scan (and across New scan, which is the same user habit).
@@ -43,19 +98,51 @@ class ScanSession extends ChangeNotifier {
   List<ScanPage> get pages => List.unmodifiable(_pages);
   int get length => _pages.length;
 
-  /// Opens the saved scan, if any. Pages whose photo is missing or whose
-  /// entry is corrupt are skipped; files not belonging to a page are deleted.
-  static Future<ScanSession> create() async {
-    final root = await getApplicationDocumentsDirectory();
-    final dir = Directory('${root.path}/pages')..createSync(recursive: true);
-    final session = ScanSession._(dir);
-    session._load();
+  /// Opens the scan that was open last, if any. Pages whose photo is missing
+  /// or whose entry is corrupt are skipped; files not belonging to a page are
+  /// deleted. [root] is the app's documents folder.
+  static Future<ScanSession> create([Directory? root]) async {
+    root ??= await getApplicationDocumentsDirectory();
+    migrateLegacy(root);
+    final scans = Directory('${root.path}/scans')..createSync(recursive: true);
+    final session = ScanSession._(scans);
+    try {
+      final id = File('${scans.path}/$_currentFile').readAsStringSync().trim();
+      if (id.isNotEmpty && File('${scans.path}/$id/$_stateFile').existsSync()) {
+        session._id = id;
+        session._load();
+      }
+    } on FileSystemException {
+      // No current scan yet.
+    }
+    if (session._pages.isEmpty) session._startFresh();
     return session;
+  }
+
+  /// Before history there was a single scan in `pages/`. Moves it into
+  /// `scans/` as the current scan (a rename, so nothing is copied).
+  @visibleForTesting
+  static void migrateLegacy(Directory root) {
+    final old = Directory('${root.path}/pages');
+    final scans = Directory('${root.path}/scans');
+    if (!old.existsSync() || scans.existsSync()) return;
+    try {
+      if (!File('${old.path}/$_stateFile').existsSync()) {
+        old.deleteSync(recursive: true);
+        return;
+      }
+      final id = _newId();
+      scans.createSync(recursive: true);
+      old.renameSync('${scans.path}/$id');
+      File('${scans.path}/$_currentFile').writeAsStringSync(id);
+    } on FileSystemException {
+      // Leave it; the next launch tries again.
+    }
   }
 
   void _load() {
     try {
-      final file = File('${_dir.path}/$_stateFile');
+      final file = File('$_path/$_stateFile');
       if (file.existsSync()) {
         final json = jsonDecode(file.readAsStringSync());
         final counter = json['counter'];
@@ -64,8 +151,12 @@ class ScanSession extends ChangeNotifier {
         if (filter is String) {
           _defaultFilter = PageFilter.values.asNameMap()[filter] ?? _defaultFilter;
         }
+        final name = json['name'];
+        if (name is String) _name = name;
+        final created = json['created'];
+        _created = created is int ? created : file.lastModifiedSync().millisecondsSinceEpoch;
         for (final j in json['pages'] as List) {
-          final page = ScanPageJson.fromJson(j, _dir.path, (p) => File(p).existsSync());
+          final page = ScanPageJson.fromJson(j, _path, (p) => File(p).existsSync());
           if (page != null) _pages.add(page);
         }
       }
@@ -82,71 +173,181 @@ class ScanSession extends ChangeNotifier {
     final keep = <String>{_stateFile};
     for (final p in _pages) {
       for (final path in [p.originalPath, p.workingPath, p.thumbPath]) {
-        if (path != null) keep.add(path.split(RegExp(r'[\/]')).last);
+        if (path != null) keep.add(_baseName(path));
       }
     }
     try {
-      for (final e in _dir.listSync()) {
-        if (e is File && !keep.contains(e.path.split(RegExp(r'[\/]')).last)) _deleteFile(e.path);
+      for (final e in Directory(_path).listSync()) {
+        if (e is File && !keep.contains(_baseName(e.path))) _deleteFile(e.path);
       }
     } on FileSystemException {
       // Best effort.
     }
   }
 
-  /// Throws away the current scan and all its files.
-  void clear() {
-    final all = List.of(_pages);
+  /// Forgets the open scan's in-memory state and makes an empty, unsaved one
+  /// current. The old scan's files are the caller's business.
+  void _startFresh() {
+    _gen++;
     _pages.clear();
-    for (final p in all) {
-      discard(p);
-    }
     _preparing.clear();
     _thumbRev.clear();
-    _deleteOrphans();
+    _id = _newId();
+    _name = '';
+    _created = DateTime.now().millisecondsSinceEpoch;
+    _writeCurrent();
+  }
+
+  void _writeCurrent() {
+    try {
+      File('${_scansDir.path}/$_currentFile').writeAsStringSync(_id);
+    } on FileSystemException {
+      // Only matters for the next launch.
+    }
+  }
+
+  /// Saves, then stops using the open scan: an empty one is deleted, a stored
+  /// one gives up its working copies (rebuilt when it is opened again).
+  Future<void> _leave() async {
+    await _flush();
+    if (_pages.isEmpty) {
+      _deleteFolder(_path);
+    } else {
+      for (final p in _pages) {
+        if (p.workingPath != null) _deleteFile(p.workingPath!);
+      }
+    }
+  }
+
+  /// Starts an empty scan; the one that was open stays in history.
+  Future<void> newScan() async {
+    if (_pages.isEmpty) return;
+    await _leave();
+    _startFresh();
     notifyListeners();
   }
 
+  Future<void> openScan(String id) async {
+    if (id == _id) return;
+    if (!File('${_scansDir.path}/$id/$_stateFile').existsSync()) return;
+    await _leave();
+    _startFresh();
+    _id = id;
+    _load();
+    _writeCurrent();
+    notifyListeners();
+  }
+
+  /// Deletes scan [id] and its files. Deleting the open one leaves an empty
+  /// new scan open.
+  Future<void> deleteScan(String id) async {
+    if (id == _id) return clear();
+    _deleteFolder('${_scansDir.path}/$id');
+  }
+
+  /// Deletes the open scan with all its files and starts an empty one.
+  Future<void> clear() async {
+    final old = _path;
+    _startFresh();
+    notifyListeners();
+    await _saveFuture; // Let an already running write finish first.
+    _deleteFolder(old);
+  }
+
+  void rename(String name) {
+    _name = name.trim();
+    notifyListeners();
+  }
+
+  /// Every stored scan with at least one page, newest first. The open scan is
+  /// included (saved first so its numbers are current).
+  Future<List<ScanSummary>> listScans() async {
+    await _flush();
+    final out = <ScanSummary>[];
+    for (final e in _scansDir.listSync()) {
+      if (e is! Directory) continue;
+      final id = _baseName(e.path);
+      try {
+        final file = File('${e.path}/$_stateFile');
+        final json = jsonDecode(file.readAsStringSync()) as Map;
+        final pages = json['pages'] as List;
+        if (pages.isEmpty) continue;
+        final first = pages.first as Map;
+        var thumb = first['thumb'] as String?;
+        if (thumb == null || !File('${e.path}/$thumb').existsSync()) thumb = first['original'] as String?;
+        var bytes = 0;
+        for (final f in e.listSync()) {
+          if (f is File) bytes += f.lengthSync();
+        }
+        final modified = file.lastModifiedSync();
+        final created = json['created'];
+        final createdAt = created is int ? DateTime.fromMillisecondsSinceEpoch(created) : modified;
+        final name = json['name'];
+        out.add(ScanSummary(
+          id: id,
+          name: name is String && name.isNotEmpty ? name : defaultScanName(createdAt),
+          created: createdAt,
+          updated: modified,
+          pageCount: pages.length,
+          thumbPath: thumb == null ? null : '${e.path}/$thumb',
+          bytes: bytes,
+          isCurrent: id == _id,
+        ));
+      } catch (_) {
+        // Not a readable scan: leave it out.
+      }
+    }
+    out.sort((a, b) => b.updated.compareTo(a.updated));
+    return out;
+  }
+
   // Saving is coalesced: any number of changes in one turn cause one write, and
-  // writes never overlap. The file is replaced atomically via a temp file.
+  // writes never overlap (they are chained). The file is replaced atomically
+  // via a temp file.
   bool _saveQueued = false;
-  bool _saving = false;
-  bool _resave = false;
+  Future<void> _saveFuture = Future.value();
 
   @override
   void notifyListeners() {
     super.notifyListeners();
+    _enqueueSave();
+  }
+
+  void _enqueueSave() {
     if (_saveQueued) return;
     _saveQueued = true;
-    scheduleMicrotask(() {
+    _saveFuture = _saveFuture.then((_) {
       _saveQueued = false;
-      _save();
+      return _save();
     });
   }
 
+  /// Completes once everything changed so far is on disk.
+  Future<void> _flush() {
+    _enqueueSave();
+    return _saveFuture;
+  }
+
   Future<void> _save() async {
-    if (_saving) {
-      _resave = true;
-      return;
-    }
-    _saving = true;
+    // Everything that depends on the open scan is captured before the first
+    // await, so a switch while writing cannot mix two scans.
+    final dir = Directory(_path);
+    if (_pages.isEmpty && !dir.existsSync()) return;
+    final text = jsonEncode({
+      'version': 2,
+      'name': _name,
+      'created': _created,
+      'counter': _counter,
+      'defaultFilter': _defaultFilter.name,
+      'pages': [for (final p in _pages) p.toJson()],
+    });
     try {
-      do {
-        _resave = false;
-        final text = jsonEncode({
-          'version': 1,
-          'counter': _counter,
-          'defaultFilter': _defaultFilter.name,
-          'pages': [for (final p in _pages) p.toJson()],
-        });
-        final tmp = File('${_dir.path}/$_stateFile.tmp');
-        await tmp.writeAsString(text, flush: true);
-        await tmp.rename('${_dir.path}/$_stateFile');
-      } while (_resave);
+      await dir.create(recursive: true);
+      final tmp = File('${dir.path}/$_stateFile.tmp');
+      await tmp.writeAsString(text, flush: true);
+      await tmp.rename('${dir.path}/$_stateFile');
     } on FileSystemException {
       // Not fatal: the next change tries again.
-    } finally {
-      _saving = false;
     }
   }
 
@@ -154,7 +355,8 @@ class ScanSession extends ChangeNotifier {
   /// never-reused name (so a retake cannot show a stale cached thumbnail).
   Future<ScanPage> _adopt(String capturedPath) async {
     final id = '${DateTime.now().microsecondsSinceEpoch}_${_counter++}';
-    final dest = '${_dir.path}/$id.jpg';
+    final dest = '$_path/$id.jpg';
+    await Directory(_path).create(recursive: true);
     await File(capturedPath).copy(dest);
     try {
       await File(capturedPath).delete();
@@ -217,7 +419,8 @@ class ScanSession extends ChangeNotifier {
   }
 
   Future<void> _prepare(ScanPage page) async {
-    final working = '${_dir.path}/${page.id}_w.jpg';
+    final dir = _path, gen = _gen;
+    final working = '$dir/${page.id}_w.jpg';
     try {
       final size = await bridge.imageSizeFile(path: page.originalPath);
       final full = [
@@ -237,6 +440,25 @@ class ScanSession extends ChangeNotifier {
         maxLongSide: _workingLongSide,
         jpegQuality: 90,
       );
+      if (gen != _gen) {
+        _deleteFile(working); // Another scan was opened meanwhile.
+        return;
+      }
+      if (page.corners != null && page.imageSize != null) {
+        // Only the working copy was missing (stored scan): keep the crop.
+        final i = _indexOf(page.id);
+        if (i < 0 || _pages[i].originalPath != page.originalPath) {
+          _deleteFile(working);
+          return;
+        }
+        _pages[i] = _pages[i].copyWith(
+          workingPath: working,
+          workingSize: Size(ws.width.toDouble(), ws.height.toDouble()),
+        );
+        notifyListeners();
+        if (_pages[i].thumbPath == null) await _refreshThumb(page.id);
+        return;
+      }
       // Detect on the small copy (fast) and scale up to the original.
       final det = await bridge.detectPageFile(srcPath: working, rotationQuarters: 0);
       final sx = size.width / ws.width, sy = size.height / ws.height;
@@ -246,7 +468,7 @@ class ScanSession extends ChangeNotifier {
           : fullRect;
 
       final i = _indexOf(page.id);
-      if (i < 0 || _pages[i].originalPath != page.originalPath) {
+      if (gen != _gen || i < 0 || _pages[i].originalPath != page.originalPath) {
         // Deleted or retaken meanwhile. A deleted page that is restored by
         // Undo simply gets prepared again when it is next opened.
         _deleteFile(working);
@@ -307,9 +529,10 @@ class ScanSession extends ChangeNotifier {
     final page = pageById(id);
     final corners = page?.effectiveWorkingCorners;
     if (page == null || corners == null) return;
+    final gen = _gen;
     final rev = _thumbRev[id] = (_thumbRev[id] ?? 0) + 1;
     // A fresh name per render so Image.file never shows a cached old one.
-    final out = '${_dir.path}/${id}_t$rev.jpg';
+    final out = '$_path/${id}_t$rev.jpg';
     try {
       await bridge.processPageFile(
         srcPath: page.workingPath!,
@@ -324,7 +547,7 @@ class ScanSession extends ChangeNotifier {
       return; // The list falls back to the original photo.
     }
     final i = _indexOf(id);
-    if (i < 0 || _thumbRev[id] != rev) {
+    if (gen != _gen || i < 0 || _thumbRev[id] != rev) {
       _deleteFile(out); // Superseded or deleted meanwhile.
       return;
     }
@@ -335,7 +558,7 @@ class ScanSession extends ChangeNotifier {
   }
 
   /// A path in the session's private directory for temporary renders.
-  String scratchPath(String name) => '${_dir.path}/$name';
+  String scratchPath(String name) => '$_path/$name';
 
   void _deleteDerived(ScanPage p) {
     if (p.workingPath != null) _deleteFile(p.workingPath!);
@@ -364,6 +587,15 @@ class ScanSession extends ChangeNotifier {
   void discard(ScanPage page) {
     _deleteFile(page.originalPath);
     _deleteDerived(page);
+  }
+
+  void _deleteFolder(String path) {
+    try {
+      final d = Directory(path);
+      if (d.existsSync()) d.deleteSync(recursive: true);
+    } on FileSystemException {
+      // Best effort.
+    }
   }
 
   void _deleteFile(String path) {

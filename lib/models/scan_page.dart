@@ -178,18 +178,19 @@ extension ScanPageJson on ScanPage {
       final corners = pts(m['corners']);
       final imageSize = size(m['imageSize']);
       final workingSize = size(m['workingSize']);
-      // Derived data is all-or-nothing: without the working copy the page is
-      // prepared again on open.
-      final derived = working != null && corners != null && imageSize != null && workingSize != null;
+      // Crop data (corners, sizes) survives a missing working copy: the copy
+      // is dropped for stored scans and rebuilt on open without re-detecting.
+      final hasCrop = corners != null && imageSize != null;
+      final hasWorking = hasCrop && working != null && workingSize != null;
       return ScanPage(
         id: id,
         originalPath: original,
-        imageSize: derived ? imageSize : null,
-        workingPath: derived ? working : null,
-        workingSize: derived ? workingSize : null,
-        corners: derived ? corners : null,
-        detectedCorners: derived ? pts(m['detected']) : null,
-        thumbPath: derived ? file(m['thumb']) : null,
+        imageSize: hasCrop ? imageSize : null,
+        workingPath: hasWorking ? working : null,
+        workingSize: hasWorking ? workingSize : null,
+        corners: hasCrop ? corners : null,
+        detectedCorners: hasCrop ? pts(m['detected']) : null,
+        thumbPath: hasCrop ? file(m['thumb']) : null,
         filter: PageFilter.values.byName(m['filter'] as String),
         rotationQuarterTurns: (m['rotation'] as int) % 4,
       );
