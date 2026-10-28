@@ -1,7 +1,7 @@
 //! Renders a labelling view of one real photo: a 10% grid with numbered lines,
 //! the ground-truth quad (green) and optionally the detected quad (red).
 //!
-//!   cargo run --release -p easyscan-core --example overlay -- <n> [det]
+//!   cargo run --release -p easyscan-core --example overlay -- <stem or _n suffix> [det|zoom]
 //!
 //! Output: `testdata/photos/_out/<n>.jpg` (gitignored with the photos).
 
@@ -61,16 +61,11 @@ fn line(img: &mut RgbImage, a: (f32, f32), b: (f32, f32), col: Rgb<u8>, thick: i
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let n: usize = args[0].parse().expect("photo index");
+    let (n, path) = support::find_photo(&args[0]);
     let with_det = args.iter().any(|a| a == "det");
-    let path = support::photos()
-        .into_iter()
-        .find(|(i, _)| *i == n)
-        .expect("photo not found")
-        .1;
     let img = support::load_oriented(&path);
     if args.iter().any(|a| a == "zoom") {
-        return zoom(n, &img, with_det);
+        return zoom(&n, &img, with_det);
     }
     let (ow, oh) = (img.width(), img.height());
     let scale = 960.0 / ow.max(oh) as f32;
@@ -140,10 +135,10 @@ fn main() {
 /// `zoom` mode: four 360px crops (one per labelled corner, TL TR / BL BR) cut
 /// from the full-resolution photo, centred on the label (green cross) with the
 /// detected corner (red cross) and a grid every 30 crop pixels, to refine labels.
-pub fn zoom(n: usize, img: &DynamicImage, with_det: bool) {
+pub fn zoom(n: &str, img: &DynamicImage, with_det: bool) {
     let (ow, oh) = (img.width() as f32, img.height() as f32);
     let rgb = img.to_rgb8();
-    let gt = support::labels().get(&n).copied().expect("label first");
+    let gt = support::labels().get(n).copied().expect("label first");
     let det = easyscan_core::detect::detect_page(img).quad.0;
     const SIDE: f32 = 360.0; // full-res pixels per crop (1:1)
     const OUT: u32 = 360;
