@@ -1,0 +1,6 @@
+title: EasyScan
+description: Privacy policy and data safety information for EasyScan.
+url: "https://burvy.github.io"
+baseurl: "/easyscan"
+theme: minima
+markdown: kramdown
