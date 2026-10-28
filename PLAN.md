@@ -15,5 +15,7 @@
 - 013 big zoomable page view + original toggle + retake: done
 
 ## Next groups
+- G3b polish from burvy's first real scan (proposed, order pending ask 014): 016 swipe to delete/retake, 017 last-shot thumbnail + count while scanning, 018 swipe between pages, 019 filter apply-to-all + default, 020 obvious New scan.
 - G4 ads: single AdMob banner + UMP consent (13+ audience).
 - G5 release: app icon/name, signing, privacy policy, Play Console walkthrough with burvy.
+- Later (scope pending): 021 past scans, 022 drawing on pages.
