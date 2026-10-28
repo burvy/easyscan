@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -22,10 +23,13 @@ bridge.ScanFilter toBridgeFilter(PageFilter f) => switch (f) {
 List<bridge.Corner> toBridgeCorners(List<Offset> c) =>
     [for (final p in c) bridge.Corner(x: p.dx, y: p.dy)];
 
-/// The pages of the current scan, in export order. Lives for the app session
-/// only (no history across launches); photos sit in private app storage.
+/// The pages of the current scan, in export order. There is exactly one scan
+/// in progress; it is saved next to its photos (`state.json`) after every
+/// change and restored on launch, so it survives the app being killed.
 class ScanSession extends ChangeNotifier {
   ScanSession._(this._dir);
+
+  static const _stateFile = 'state.json';
 
   final Directory _dir;
   final List<ScanPage> _pages = [];
@@ -34,13 +38,106 @@ class ScanSession extends ChangeNotifier {
   List<ScanPage> get pages => List.unmodifiable(_pages);
   int get length => _pages.length;
 
-  /// Creates the session and clears photos left over from a previous run.
+  /// Opens the saved scan, if any. Pages whose photo is missing or whose
+  /// entry is corrupt are skipped; files not belonging to a page are deleted.
   static Future<ScanSession> create() async {
     final root = await getApplicationDocumentsDirectory();
-    final dir = Directory('${root.path}/pages');
-    if (dir.existsSync()) dir.deleteSync(recursive: true);
-    dir.createSync(recursive: true);
-    return ScanSession._(dir);
+    final dir = Directory('${root.path}/pages')..createSync(recursive: true);
+    final session = ScanSession._(dir);
+    session._load();
+    return session;
+  }
+
+  void _load() {
+    try {
+      final file = File('${_dir.path}/$_stateFile');
+      if (file.existsSync()) {
+        final json = jsonDecode(file.readAsStringSync());
+        final counter = json['counter'];
+        if (counter is int) _counter = counter;
+        for (final j in json['pages'] as List) {
+          final page = ScanPageJson.fromJson(j, _dir.path, (p) => File(p).existsSync());
+          if (page != null) _pages.add(page);
+        }
+      }
+    } catch (_) {
+      // Unreadable state: start empty; orphan cleanup below removes the files.
+    }
+    _deleteOrphans();
+    for (final p in _pages) {
+      if (!p.isPrepared) _prepareInBackground(p.id);
+    }
+  }
+
+  void _deleteOrphans() {
+    final keep = <String>{_stateFile};
+    for (final p in _pages) {
+      for (final path in [p.originalPath, p.workingPath, p.thumbPath]) {
+        if (path != null) keep.add(path.split(RegExp(r'[\/]')).last);
+      }
+    }
+    try {
+      for (final e in _dir.listSync()) {
+        if (e is File && !keep.contains(e.path.split(RegExp(r'[\/]')).last)) _deleteFile(e.path);
+      }
+    } on FileSystemException {
+      // Best effort.
+    }
+  }
+
+  /// Throws away the current scan and all its files.
+  void clear() {
+    final all = List.of(_pages);
+    _pages.clear();
+    for (final p in all) {
+      discard(p);
+    }
+    _preparing.clear();
+    _thumbRev.clear();
+    _deleteOrphans();
+    notifyListeners();
+  }
+
+  // Saving is coalesced: any number of changes in one turn cause one write, and
+  // writes never overlap. The file is replaced atomically via a temp file.
+  bool _saveQueued = false;
+  bool _saving = false;
+  bool _resave = false;
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    if (_saveQueued) return;
+    _saveQueued = true;
+    scheduleMicrotask(() {
+      _saveQueued = false;
+      _save();
+    });
+  }
+
+  Future<void> _save() async {
+    if (_saving) {
+      _resave = true;
+      return;
+    }
+    _saving = true;
+    try {
+      do {
+        _resave = false;
+        final text = jsonEncode({
+          'version': 1,
+          'counter': _counter,
+          'pages': [for (final p in _pages) p.toJson()],
+        });
+        final tmp = File('${_dir.path}/$_stateFile.tmp');
+        await tmp.writeAsString(text, flush: true);
+        await tmp.rename('${_dir.path}/$_stateFile');
+      } while (_resave);
+    } on FileSystemException {
+      // Not fatal: the next change tries again.
+    } finally {
+      _saving = false;
+    }
   }
 
   /// Moves a freshly captured photo into private storage under a new,

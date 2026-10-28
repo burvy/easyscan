@@ -37,4 +37,45 @@ void main() {
     expect(page.effectiveWorkingCorners,
         const [Offset(5, 90), Offset(5, 10), Offset(45, 10), Offset(45, 90)]);
   });
+
+group('ScanPage persistence', () {
+  bool all(String _) => true;
+  final page = ScanPage(
+    id: 'p1',
+    originalPath: '/a/pages/p1.jpg',
+    imageSize: const Size(400, 300),
+    workingPath: '/a/pages/p1_w.jpg',
+    workingSize: const Size(200, 150),
+    corners: quad,
+    detectedCorners: quad,
+    thumbPath: '/a/pages/p1_t1.jpg',
+    filter: PageFilter.blackWhite,
+    rotationQuarterTurns: 3,
+  );
+
+  test('round-trips, rebasing paths onto the new folder', () {
+    final back = ScanPageJson.fromJson(page.toJson(), '/b/pages', all)!;
+    expect(back.id, 'p1');
+    expect(back.originalPath, '/b/pages/p1.jpg');
+    expect(back.workingPath, '/b/pages/p1_w.jpg');
+    expect(back.thumbPath, '/b/pages/p1_t1.jpg');
+    expect(back.corners, quad);
+    expect(back.filter, PageFilter.blackWhite);
+    expect(back.rotationQuarterTurns, 3);
+    expect(back.imageSize, const Size(400, 300));
+  });
+
+  test('missing original skips the page; missing working copy drops derived data', () {
+    expect(ScanPageJson.fromJson(page.toJson(), '/b', (p) => false), isNull);
+    final back = ScanPageJson.fromJson(page.toJson(), '/b', (p) => !p.contains('_w'))!;
+    expect(back.isPrepared, isFalse);
+    expect(back.filter, PageFilter.blackWhite);
+  });
+
+  test('corrupt entries return null instead of throwing', () {
+    expect(ScanPageJson.fromJson('junk', '/b', all), isNull);
+    expect(ScanPageJson.fromJson({'id': 'x'}, '/b', all), isNull);
+    expect(ScanPageJson.fromJson({...page.toJson(), 'filter': 'nope'}, '/b', all), isNull);
+  });
+});
 }

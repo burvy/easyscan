@@ -122,3 +122,79 @@ class ScanPage {
         rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
       );
 }
+
+/// Persistence. File paths are stored relative to the pages folder (the app
+/// data path can change across reinstalls and updates).
+extension ScanPageJson on ScanPage {
+  Map<String, Object?> toJson() {
+    String? rel(String? p) => p?.split(RegExp(r'[\\/]')).last;
+    List<List<double>>? pts(List<Offset>? l) =>
+        l == null ? null : [for (final o in l) [o.dx, o.dy]];
+    List<double>? size(Size? s) => s == null ? null : [s.width, s.height];
+    return {
+      'id': id,
+      'original': rel(originalPath),
+      'imageSize': size(imageSize),
+      'working': rel(workingPath),
+      'workingSize': size(workingSize),
+      'corners': pts(corners),
+      'detected': pts(detectedCorners),
+      'thumb': rel(thumbPath),
+      'filter': filter.name,
+      'rotation': rotationQuarterTurns,
+    };
+  }
+
+  /// Returns null if [j] is malformed or its original photo is gone. Derived
+  /// files that are missing are dropped (they are rebuilt on demand).
+  static ScanPage? fromJson(Object? j, String dir, bool Function(String) exists) {
+    try {
+      final m = j as Map;
+      final id = m['id'] as String;
+      final original = '$dir/${m['original'] as String}';
+      if (!exists(original)) return null;
+      Size? size(Object? v) {
+        if (v == null) return null;
+        final l = v as List;
+        return Size((l[0] as num).toDouble(), (l[1] as num).toDouble());
+      }
+
+      List<Offset>? pts(Object? v) {
+        if (v == null) return null;
+        final l = [
+          for (final p in v as List)
+            Offset(((p as List)[0] as num).toDouble(), (p[1] as num).toDouble())
+        ];
+        return l.length == 4 ? l : null;
+      }
+
+      String? file(Object? v) {
+        if (v == null) return null;
+        final p = '$dir/${v as String}';
+        return exists(p) ? p : null;
+      }
+
+      final working = file(m['working']);
+      final corners = pts(m['corners']);
+      final imageSize = size(m['imageSize']);
+      final workingSize = size(m['workingSize']);
+      // Derived data is all-or-nothing: without the working copy the page is
+      // prepared again on open.
+      final derived = working != null && corners != null && imageSize != null && workingSize != null;
+      return ScanPage(
+        id: id,
+        originalPath: original,
+        imageSize: derived ? imageSize : null,
+        workingPath: derived ? working : null,
+        workingSize: derived ? workingSize : null,
+        corners: derived ? corners : null,
+        detectedCorners: derived ? pts(m['detected']) : null,
+        thumbPath: derived ? file(m['thumb']) : null,
+        filter: PageFilter.values.byName(m['filter'] as String),
+        rotationQuarterTurns: (m['rotation'] as int) % 4,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
