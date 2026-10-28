@@ -79,7 +79,8 @@ class _AdBannerState extends State<AdBanner> {
             _platformSize = size ?? AdSize(width: width, height: _maxHeightDp);
           });
         },
-        onAdFailedToLoad: (failedAd, _) {
+        onAdFailedToLoad: (failedAd, error) {
+          debugPrint('[EasyScanAds] banner failed to load: $error');
           failedAd.dispose();
           // Collapsed again; the widget stays collapsed for the session.
           if (mounted) {
