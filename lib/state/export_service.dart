@@ -1,9 +1,11 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:path_provider/path_provider.dart';
 
 import '../models/scan_page.dart';
 import '../src/rust/api.dart';
+import 'scan_session.dart';
 
 /// JPEG quality presets for the exported PDF.
 enum ExportQuality {
@@ -22,7 +24,7 @@ class ExportService {
   /// Writes `<fileName>.pdf` and returns it. [onProgress] reports
   /// (steps done, total steps): one step per page, plus one for assembly.
   static Future<File> exportPdf({
-    required List<ScanPage> pages,
+    required ScanSession session,
     required String fileName,
     required PdfPageSize pageSize,
     required ExportQuality quality,
@@ -39,20 +41,19 @@ class ExportService {
     if (work.existsSync()) work.deleteSync(recursive: true);
     work.createSync(recursive: true);
 
+    final pages = List.of(session.pages);
     final total = pages.length + 1;
     final processed = <String>[];
     for (var i = 0; i < pages.length; i++) {
-      final page = pages[i];
+      // A page only has corners once preparation has run; waiting here also
+      // starts it for pages the user never opened. Throws if the photo fails.
+      await session.whenPrepared(pages[i].id);
+      final page = session.pageById(pages[i].id) ?? pages[i];
       final out = '${work.path}/page_${i.toString().padLeft(4, '0')}.jpg';
-      final size = await imageSizeFile(path: page.originalPath);
       await processPageFile(
         srcPath: page.originalPath,
-        corners: rotateCorners(
-          page.corners?.map((p) => Corner(x: p.dx, y: p.dy)).toList() ??
-              fullFrameCorners(size.width, size.height),
-          page.rotationQuarterTurns,
-        ),
-        filter: _scanFilter(page.filter),
+        corners: toBridgeCorners(page.effectiveCorners ?? _fullFrame(page)),
+        filter: toBridgeFilter(page.filter),
         rotationQuarters: 0,
         outPath: out,
         maxLongSide: null,
@@ -74,33 +75,22 @@ class ExportService {
     return File(outPath);
   }
 
-  /// Corners of the whole oriented image, TL, TR, BR, BL.
-  static List<Corner> fullFrameCorners(int width, int height) => [
-        Corner(x: 0, y: 0),
-        Corner(x: width.toDouble(), y: 0),
-        Corner(x: width.toDouble(), y: height.toDouble()),
-        Corner(x: 0, y: height.toDouble()),
-      ];
-
-  /// Rotating the page clockwise by [quarterTurns] is cycling the corner list
-  /// right by the same amount: TL,TR,BR,BL becomes BL,TL,TR,BR after one turn.
-  /// The bridge always gets rotation 0, so the photo itself is never re-rotated.
-  static List<Corner> rotateCorners(List<Corner> corners, int quarterTurns) {
-    final k = quarterTurns % 4;
-    return [for (var i = 0; i < 4; i++) corners[(i - k + 4) % 4]];
+  /// Whole oriented image, TL, TR, BR, BL. Only used if a page somehow has no
+  /// corners after preparation; the normal path always has them.
+  static List<Offset> _fullFrame(ScanPage page) {
+    final s = page.imageSize!;
+    return [
+      const Offset(0, 0),
+      Offset(s.width, 0),
+      Offset(s.width, s.height),
+      Offset(0, s.height),
+    ];
   }
 
   /// Removes characters that are invalid in file names on Android and common
   /// desktops. Falls back to a fixed name if nothing usable is left.
   static String safeFileName(String name) {
-    final cleaned = name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '').trim();
+    final cleaned = name.replaceAll(RegExp(r'[\/:*?"<>|\x00-\x1f]'), '').trim();
     return cleaned.isEmpty ? 'Scan' : cleaned;
   }
-
-  static ScanFilter _scanFilter(PageFilter filter) => switch (filter) {
-        PageFilter.original => ScanFilter.original,
-        PageFilter.grayscale => ScanFilter.grayscale,
-        PageFilter.enhance => ScanFilter.enhance,
-        PageFilter.blackWhite => ScanFilter.blackWhite,
-      };
 }

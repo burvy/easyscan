@@ -84,7 +84,7 @@ class PageListScreen extends StatelessWidget {
               title: const Text('EasyScan'),
               actions: [
                 TextButton(
-                  onPressed: pages.isEmpty ? null : () => showExportDialog(context, pages),
+                  onPressed: pages.isEmpty ? null : () => showExportDialog(context, session),
                   child: const Text('Export'),
                 ),
               ],

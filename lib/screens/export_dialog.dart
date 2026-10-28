@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../models/scan_page.dart';
 import '../src/rust/api.dart';
 import '../state/export_service.dart';
+import '../state/scan_session.dart';
 
 /// Export options for the next PDF. Kept for this app session only; they go
 /// back to the defaults on the next launch.
@@ -16,18 +16,18 @@ class _ExportChoices {
 
 /// Asks for a file name, page size and quality, exports the pages in order,
 /// then opens the share sheet with the PDF.
-Future<void> showExportDialog(BuildContext context, List<ScanPage> pages) {
+Future<void> showExportDialog(BuildContext context, ScanSession session) {
   return showDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (_) => _ExportDialog(pages: pages),
+    builder: (_) => _ExportDialog(session: session),
   );
 }
 
 class _ExportDialog extends StatefulWidget {
-  const _ExportDialog({required this.pages});
+  const _ExportDialog({required this.session});
 
-  final List<ScanPage> pages;
+  final ScanSession session;
 
   @override
   State<_ExportDialog> createState() => _ExportDialogState();
@@ -62,12 +62,12 @@ class _ExportDialogState extends State<_ExportDialog> {
     _ExportChoices.quality = _quality;
     setState(() {
       _done = 0;
-      _total = widget.pages.length + 1;
+      _total = widget.session.length + 1;
     });
 
     try {
       final file = await ExportService.exportPdf(
-        pages: widget.pages,
+        session: widget.session,
         fileName: _name.text.trim(),
         pageSize: _pageSize,
         quality: _quality,
@@ -108,8 +108,8 @@ class _ExportDialogState extends State<_ExportDialog> {
           if (_busy) ...[
             LinearProgressIndicator(value: progress),
             const SizedBox(height: 8),
-            Text('Preparing page ${(_done! + 1).clamp(1, widget.pages.length)} '
-                'of ${widget.pages.length}'),
+            Text('Preparing page ${(_done! + 1).clamp(1, widget.session.length)} '
+                'of ${widget.session.length}'),
           ] else ...[
             TextField(
               controller: _name,
