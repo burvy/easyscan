@@ -20,7 +20,7 @@
 - 018 swipe between pages in viewer + crop: done, then 019 filter apply-to-all + default: done
 
 ## Also running: G4 groundwork
-- 023 AdMob banner + UMP consent with test IDs (OpenCode2)
+- 023 AdMob banner + UMP consent with test IDs DONE (Sonnet2; fixed AdSize.banner, Impeller stays on)
 
 ## Next groups
 - G3c: 021 past scans DONE; 024 test fix DONE; 022 draw on pages (pen + white-out), in progress (OpenCode); 025 orphan-file sweep (proposed, cheap).
