@@ -238,7 +238,7 @@ class _CropScreenState extends State<CropScreen> {
               ]),
             ),
             const SizedBox(height: 4),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            Row(children: [
               _ToolButton(
                 icon: _previewing ? Icons.crop : Icons.visibility_outlined,
                 label: _previewing ? 'Edit crop' : 'Preview',
@@ -278,9 +278,24 @@ class _ToolButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-
   @override
-  Widget build(BuildContext context) => TextButton.icon(onPressed: onPressed, icon: Icon(icon), label: Text(label));
+  Widget build(BuildContext context) => Expanded(
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(height: 2),
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+            ]),
+          ),
+        ),
+      );
 }
 
 /// The photo with a draggable quad. [corners] are in [imageSize] pixels;
