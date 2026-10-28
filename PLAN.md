@@ -15,7 +15,7 @@
 - 013 big zoomable page view + original toggle + retake: done
 
 ## Focus now: G3b polish from burvy's first real scan
-- 016 swipe page row: delete/retake: done; 020 obvious New scan (Haiku)
+- 016 swipe page row: delete/retake: done; 020 obvious New scan: done
 - 017 last-shot thumbnail + count while scanning: done
 - 018 swipe between pages in viewer + crop: done, then 019 filter apply-to-all + default: done
 
