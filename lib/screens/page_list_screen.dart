@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/scan_page.dart';
 import '../state/scan_session.dart';
 import 'camera_screen.dart';
+import 'crop_screen.dart';
 import 'export_dialog.dart';
 
 /// Home screen: the pages of the current scan, drag to reorder, tap for
@@ -50,12 +51,15 @@ class PageListScreen extends StatelessWidget {
               _openCamera(context, retakeIndex: index);
             },
           ),
-          // Placeholder for task 010 (crop and filter).
-          const ListTile(
-            enabled: false,
-            leading: Icon(Icons.crop),
-            title: Text('Crop & filter'),
-            subtitle: Text('Coming soon'),
+          ListTile(
+            leading: const Icon(Icons.crop),
+            title: const Text('Crop & filter'),
+            onTap: () {
+              Navigator.pop(sheet);
+              Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => CropScreen(session: session, pageId: session.pages[index].id),
+              ));
+            },
           ),
           ListTile(
             leading: const Icon(Icons.delete_outline),
@@ -125,8 +129,8 @@ class _PageTile extends StatelessWidget {
             width: 56,
             height: 72,
             // Decode small: full 12 MP bitmaps in a list would exhaust memory.
-            child: Image.file(File(page.originalPath),
-                cacheWidth: 168, fit: BoxFit.cover, gaplessPlayback: true),
+            child: Image.file(File(page.thumbPath ?? page.originalPath),
+                cacheWidth: 168, fit: BoxFit.contain, gaplessPlayback: true),
           ),
         ),
         title: Text('Page ${index + 1}'),
