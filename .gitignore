@@ -17,3 +17,6 @@
 *.iml
 /build/
 /.flutter-plugins-dependencies
+
+# real test photos (private)
+/testdata/photos/
