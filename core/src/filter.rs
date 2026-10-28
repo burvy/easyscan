@@ -7,7 +7,7 @@
 //! it is compared with the paper around it. Everything is one pass per pixel
 //! plus a grid the size of a few hundred cells, so it is fast on 12 MP photos.
 
-use image::{DynamicImage, GrayImage, ImageBuffer, Luma, Rgb, RgbImage};
+use image::{DynamicImage, GrayImage, ImageBuffer, Luma, Pixel, Rgb, RgbImage};
 
 /// A scan filter. `Original` returns the photo unchanged, so the UI can always
 /// offer a way back.
@@ -30,6 +30,19 @@ pub enum Filter {
 /// estimate, so 0.85 leaves a paper-noise margin of the same size the
 /// pencil needs.
 const INK_THRESHOLD: f32 = 0.85;
+/// Notebook rule lines are pale, saturated blue. Cameras under warm light
+/// make even their blue channel read darker than red, so "blue" has to be
+/// judged against the local paper colour: a pixel whose blue channel is
+/// this much closer to paper-bright than its red channel (both relative
+/// to the paper estimate) counts as rule-line blue. Pencil stays at the
+/// paper's own warmth (~0-0.02 after normalisation), so it is untouched;
+/// red pen reads strongly negative.
+const RULE_BLUE_EXCESS: f32 = 0.02;
+/// Rule-line blue above [`RULE_BLUE_EXCESS`] is only ignored for ink while
+/// the pixel is still this bright relative to paper. Blue pen ink (and any
+/// readable writing) is far darker than the pale rule lines, so this keeps
+/// darker-than-rule blue writing black.
+const RULE_MIN_LUMA: f32 = 0.66;
 /// Enhance maps this fraction of the local paper brightness to pure white, so
 /// slightly grey paper still comes out white.
 const PAPER_WHITE: f32 = 0.9;
@@ -49,6 +62,14 @@ const PAPER_PERCENTILE: f32 = 0.97;
 /// 12 MP (a cell is ~94 px), a fat marker blob or filled-in box. Wider
 /// blackouts than that still hole out at the centre.
 const NEIGHBORHOOD_RADIUS: usize = 2;
+/// But the raise only happens for cells that are *buried*: genuinely much
+/// darker than the brightest neighbour. A page in a hand shadow is also
+/// darker than its neighbours, yet its own estimate is the right one —
+/// raising it to the lit paper beyond the shadow edge would turn the
+/// shadowed paper black instead of white. A cell measuring less than this
+/// fraction of the brightest neighbour is solid ink; any lighter, the
+/// shadowed paper keeps its own estimate.
+const BURIED_INK_RATIO: f32 = 0.5;
 
 /// Apply `filter` to a photo and return the result.
 ///
@@ -59,7 +80,7 @@ pub fn apply(image: &DynamicImage, filter: Filter) -> DynamicImage {
         Filter::Original => image.clone(),
         Filter::Grayscale => DynamicImage::ImageLuma8(image.to_luma8()),
         Filter::Enhance => DynamicImage::ImageRgb8(enhance(&image.to_rgb8())),
-        Filter::BlackWhite => DynamicImage::ImageLuma8(black_white(&image.to_luma8())),
+        Filter::BlackWhite => DynamicImage::ImageLuma8(black_white(&image.to_rgb8())),
     }
 }
 
@@ -82,19 +103,43 @@ fn enhance(rgb: &RgbImage) -> RgbImage {
 
 /// Pure black or white. A pixel is ink when it is clearly darker than the
 /// paper around it, so a shadow does not blacken a whole region the way one
-/// global threshold would.
-fn black_white(gray: &GrayImage) -> GrayImage {
-    let (width, height) = gray.dimensions();
-    let background = Background::estimate(gray.as_raw(), width, height, 1);
+/// global threshold would. One exception: pale blue notebook rule lines are
+/// exactly as dark as faint pencil, so darkness alone cannot keep them out
+/// — they are blue instead, and blueness is judged relative to the local
+/// paper colour rather than by hue (which the camera's warm white balance
+/// would otherwise swamp) — see [`RULE_BLUE_EXCESS`], [`RULE_MIN_LUMA`].
+/// Pencil is neutral, red pen strongly red, so only the rule lines drop;
+/// blue pen ink stays black thanks to its darkness.
+fn black_white(rgb: &RgbImage) -> GrayImage {
+    let (width, height) = rgb.dimensions();
+    // Per-channel paper estimate — the same grid `enhance` uses — so the
+    // blueness test can be relative to what the paper looks like locally.
+    let background = Background::estimate(rgb.as_raw(), width, height, 3);
     ImageBuffer::from_fn(width, height, |x, y| {
-        let value = gray.get_pixel(x, y).0[0] as f32;
-        let paper = background.at(x, y, 0).max(1.0);
-        Luma([if value < INK_THRESHOLD * paper {
-            0
-        } else {
-            255
-        }])
+        let src = rgb.get_pixel(x, y).0;
+        let value = Rgb(src).to_luma().0[0] as f32;
+        let paper_r = background.at(x, y, 0).max(1.0);
+        let paper_b = background.at(x, y, 2).max(1.0);
+        let paper_luma =
+            0.2126 * paper_r + 0.7152 * background.at(x, y, 1) + 0.0722 * paper_b;
+        let ink = value < INK_THRESHOLD * paper_luma.max(1.0)
+            && !is_rule_line_blue(src, paper_r, paper_b, value, paper_luma);
+        Luma([if ink { 0 } else { 255 }])
     })
+}
+
+/// A pale, relatively blue pixel: a notebook rule line (and only the rule
+/// line — blue ink is darker, see [`RULE_MIN_LUMA`], and nothing else on a
+/// page is blue-tinted relative to the paper it sits on).
+fn is_rule_line_blue(
+    pixel: [u8; 3],
+    paper_r: f32,
+    paper_b: f32,
+    value: f32,
+    paper_luma: f32,
+) -> bool {
+    let blue_excess = pixel[2] as f32 / paper_b - pixel[0] as f32 / paper_r;
+    blue_excess > RULE_BLUE_EXCESS && value > RULE_MIN_LUMA * paper_luma
 }
 
 /// Index pair and interpolation weight for one pixel along one axis.
@@ -166,15 +211,17 @@ impl Background {
 
         // Paper estimate 2: raise each cell to the brightest neighbour
         // within [`NEIGHBORHOOD_RADIUS`] (measured in cells, so it scales
-        // with the page). Only cells with no paper of their own — buried in
-        // fat ink strokes — see their estimate move much; for normal cells
-        // the brightest neighbour within two cells is nearly their own
-        // value, given how gently lighting changes over that distance.
+        // with the page) — but only when the cell is genuinely buried in
+        // ink ([`BURIED_INK_RATIO`]); a hand-shadowed page also measures
+        // darker than its neighbours, and its own estimate is the right
+        // one there. For normal lit cells this is a no-op, given how
+        // gently lighting changes over that distance.
         let mut raised = vec![0u8; cells * channels];
         for j in 0..rows {
             for i in 0..cols {
                 for c in 0..channels {
-                    let mut m = 0u8;
+                    let own = values[(j * cols + i) * channels + c];
+                    let mut m = own;
                     for jj in j.saturating_sub(NEIGHBORHOOD_RADIUS)
                         ..=(j + NEIGHBORHOOD_RADIUS).min(rows - 1)
                     {
@@ -184,7 +231,12 @@ impl Background {
                             m = m.max(values[(jj * cols + ii) * channels + c]);
                         }
                     }
-                    raised[(j * cols + i) * channels + c] = m;
+                    raised[(j * cols + i) * channels + c] =
+                        if (own as f32) < BURIED_INK_RATIO * m as f32 {
+                            m
+                        } else {
+                            own
+                        };
                 }
             }
         }
@@ -357,6 +409,50 @@ mod tests {
                 let v = out.get_pixel(x, y).0[0];
                 assert_eq!(v, 255, "speckle at ({x}, {y})");
             }
+        }
+    }
+
+    /// Rule lines, pencil, and blue pen all sit at nearly the same
+    /// darkness in a warm-lit photo (real photo measurements: rule line
+    /// rgb(162,149,146) on paper rgb(204,185,173), pencil rgb(148,132,128)).
+    /// Only the rule line must disappear; pencil (neutral warmth) and blue
+    /// pen (far darker) stay black.
+    #[test]
+    fn blue_rule_line_vanishes_but_pencil_and_blue_pen_stay() {
+        const PAPER: [u8; 3] = [204, 185, 173];
+        const RULE: [u8; 3] = [162, 149, 146];
+        const PENCIL: [u8; 3] = [148, 132, 128];
+        const BLUE_PEN: [u8; 3] = [60, 80, 170];
+        const RED_PEN: [u8; 3] = [150, 40, 40];
+
+        let rgb: RgbImage = ImageBuffer::from_fn(1200, 600, |x, y| {
+            let colour = if y == 300 {
+                RULE
+            } else if (500..516).contains(&x) {
+                BLUE_PEN
+            } else if (700..716).contains(&x) {
+                PENCIL
+            } else if (400..416).contains(&x) {
+                RED_PEN
+            } else {
+                PAPER
+            };
+            Rgb(colour)
+        });
+        let out = match apply(&DynamicImage::ImageRgb8(rgb), Filter::BlackWhite) {
+            DynamicImage::ImageLuma8(img) => img,
+            other => panic!("expected Luma8, got {:?}", other.color()),
+        };
+
+        // Rule line is gone.
+        for x in (600..700).step_by(4) {
+            assert_eq!(out.get_pixel(x, 300).0[0], 255, "rule line at ({x}, 300)");
+        }
+        // Pencil, blue pen, red pen stay legible.
+        for y in (100..200).step_by(7) {
+            assert_eq!(out.get_pixel(708, y).0[0], 0, "pencil at (708, {y})");
+            assert_eq!(out.get_pixel(508, y).0[0], 0, "blue pen at (508, {y})");
+            assert_eq!(out.get_pixel(408, y).0[0], 0, "red pen at (408, {y})");
         }
     }
 
