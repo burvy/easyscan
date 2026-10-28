@@ -50,11 +50,15 @@ class ExportService {
       await session.whenPrepared(pages[i].id);
       final page = session.pageById(pages[i].id) ?? pages[i];
       final out = '${work.path}/page_${i.toString().padLeft(4, '0')}.jpg';
+      // Annotation strokes are burned in here so the PDF shows the ink at
+      // full resolution; unannotated pages keep today's bytes (None keeps
+      // the pipeline identical).
       await processPageFile(
         srcPath: page.originalPath,
         corners: toBridgeCorners(page.effectiveCorners ?? _fullFrame(page)),
         filter: toBridgeFilter(page.filter),
         rotationQuarters: 0,
+        strokes: page.strokes.isEmpty ? null : toBridgeStrokeSpecs(page.strokes),
         outPath: out,
         maxLongSide: null,
         jpegQuality: quality.jpegQuality,

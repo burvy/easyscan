@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../src/rust/api.dart' as bridge;
 import '../state/scan_session.dart';
+import 'annotate_screen.dart';
 import 'camera_screen.dart';
 import 'crop_screen.dart';
 import 'page_swipe.dart';
@@ -16,7 +17,7 @@ const _resultLongSide = 2000;
 enum PageChange { retook, deleted }
 
 /// One page, large: the processed result (zoomable) or the original photo
-/// (zoomable), with Retake, Crop & filter and Delete underneath. Pops with a
+/// (zoomable), with Retake, Crop & filter, Draw and Delete underneath. Pops with a
 /// [PageChange] when the page was retaken or deleted, so the caller can react.
 class PageViewScreen extends StatefulWidget {
   const PageViewScreen({
@@ -63,6 +64,7 @@ class _PageViewScreenState extends State<PageViewScreen> {
       corners: toBridgeCorners(page.effectiveWorkingCorners!),
       filter: toBridgeFilter(page.filter),
       rotationQuarters: 0,
+      strokes: page.strokes.isEmpty ? null : toBridgeStrokeSpecs(page.strokes),
       outPath: out,
       maxLongSide: _resultLongSide,
       jpegQuality: 92,
@@ -122,6 +124,14 @@ class _PageViewScreenState extends State<PageViewScreen> {
     }
     await Navigator.of(context).push<void>(MaterialPageRoute(
       builder: (_) => CropScreen(session: widget.session, pageId: _pageId, onPageChanged: (id) => _pageId = id),
+    ));
+    if (!mounted) return;
+    setState(() => _result = _renderResult());
+  }
+
+  Future<void> _annotate() async {
+    await Navigator.of(context).push<void>(MaterialPageRoute(
+      builder: (_) => AnnotateScreen(session: widget.session, pageId: _pageId),
     ));
     if (!mounted) return;
     setState(() => _result = _renderResult());
@@ -212,6 +222,10 @@ class _PageViewScreenState extends State<PageViewScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _actionButton(_cropAndFilter, Icons.crop, 'Crop & filter'),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _actionButton(_annotate, Icons.draw_outlined, 'Draw'),
                 ),
                 const SizedBox(width: 8),
                 Expanded(

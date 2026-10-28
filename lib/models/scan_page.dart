@@ -1,5 +1,7 @@
 import 'dart:ui';
 
+import 'strokes.dart';
+
 /// Filter applied when a page is rendered. Mirrors the core's filters but is
 /// owned by Dart so the page model does not depend on generated bridge code.
 enum PageFilter { original, grayscale, enhance, blackWhite }
@@ -48,6 +50,7 @@ class ScanPage {
     // homework photos; "Original" would leave shadows and a grey cast.
     this.filter = PageFilter.enhance,
     this.rotationQuarterTurns = 0,
+    this.strokes = const [],
   });
 
   /// Unique and never reused, so it is a stable key and image-cache key.
@@ -82,6 +85,12 @@ class ScanPage {
   /// corner order ([effectiveCorners]); the bridge always gets 0.
   final int rotationQuarterTurns;
 
+  /// Annotation strokes drawn over the result, in the result's frame
+  /// ([0..1]², see [Stroke]). Burned into renders at render time; the photo
+  /// itself is never touched. A retake replaces the photo, so it clears
+  /// these.
+  final List<Stroke> strokes;
+
   bool get isPrepared => workingPath != null && corners != null;
 
   /// [corners] in warp order, i.e. with the rotation applied.
@@ -108,6 +117,7 @@ class ScanPage {
     bool clearDerived = false,
     PageFilter? filter,
     int? rotationQuarterTurns,
+    List<Stroke>? strokes,
   }) =>
       ScanPage(
         id: id,
@@ -120,6 +130,7 @@ class ScanPage {
         thumbPath: clearDerived ? null : (thumbPath ?? this.thumbPath),
         filter: filter ?? this.filter,
         rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
+        strokes: strokes ?? this.strokes,
       );
 }
 
@@ -142,6 +153,8 @@ extension ScanPageJson on ScanPage {
       'thumb': rel(thumbPath),
       'filter': filter.name,
       'rotation': rotationQuarterTurns,
+      // Omitted when empty: most pages have no annotations.
+      'strokes': strokes.isEmpty ? null : [for (final s in strokes) s.toJson()],
     };
   }
 
@@ -193,6 +206,10 @@ extension ScanPageJson on ScanPage {
         thumbPath: hasCrop ? file(m['thumb']) : null,
         filter: PageFilter.values.byName(m['filter'] as String),
         rotationQuarterTurns: (m['rotation'] as int) % 4,
+        // Strokes are anchored to the crop's result frame; without crop
+        // data they have no frame and would land somewhere else after
+        // re-detection, so they only ride along with it.
+        strokes: hasCrop ? parseStrokes(m['strokes']) : const [],
       );
     } catch (_) {
       return null;

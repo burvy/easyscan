@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/scan_page.dart';
+import '../models/strokes.dart';
 import '../src/rust/api.dart' as bridge;
 
 /// Long side of the per-page working copy that previews run on.
@@ -22,6 +23,18 @@ bridge.ScanFilter toBridgeFilter(PageFilter f) => switch (f) {
 
 List<bridge.Corner> toBridgeCorners(List<Offset> c) =>
     [for (final p in c) bridge.Corner(x: p.dx, y: p.dy)];
+
+bridge.StrokeSpec toBridgeStrokeSpec(Stroke s) => bridge.StrokeSpec(
+      // The bridge's tool ints mirror this enum's order (0 pen, 1 white-out).
+      tool: s.tool.index,
+      color: s.color,
+      width: s.width,
+      points: Float64List.fromList(
+          [for (final p in s.points) ...[p.dx, p.dy]]),
+    );
+
+List<bridge.StrokeSpec> toBridgeStrokeSpecs(List<Stroke> strokes) =>
+    [for (final s in strokes) toBridgeStrokeSpec(s)];
 
 /// Lists a stored scan in the history screen.
 class ScanSummary {
@@ -397,7 +410,9 @@ class ScanSession extends ChangeNotifier {
   Future<void> retake(int index, String capturedPath) async {
     final old = _pages[index];
     final fresh = await _adopt(capturedPath);
-    _pages[index] = old.copyWith(originalPath: fresh.originalPath, clearDerived: true);
+    // A retake replaces the photo: annotations on it no longer make sense.
+    _pages[index] =
+        old.copyWith(originalPath: fresh.originalPath, clearDerived: true, strokes: const []);
     _deleteFile(old.originalPath);
     _deleteDerived(old);
     notifyListeners();
@@ -531,13 +546,27 @@ class ScanSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Replaces page [id]'s annotation strokes and re-renders the thumbnail so
+  /// the list shows the ink (strokes are burned in at render time; no image
+  /// file ever holds them durably).
+  Future<void> setStrokes(String id, List<Stroke> strokes) {
+    final i = _indexOf(id);
+    if (i < 0) return Future.value();
+    _pages[i] = _pages[i].copyWith(strokes: List.unmodifiable(strokes));
+    notifyListeners();
+    return _refreshThumb(id);
+  }
+
   /// Stores new crop settings for page [id] and re-renders its thumbnail.
   Future<void> setEdits(String id,
       {required List<Offset> corners, required PageFilter filter, required int rotationQuarterTurns}) {
     final i = _indexOf(id);
     if (i < 0) return Future.value();
-    _pages[i] = _pages[i].copyWith(
+    final before = _pages[i];
+    final edited = before.copyWith(
         corners: corners, filter: filter, rotationQuarterTurns: rotationQuarterTurns);
+    // Strokes are anchored to the paper: they follow a rotation or recrop.
+    _pages[i] = edited.copyWith(strokes: strokesAfterEdit(before, edited));
     notifyListeners();
     return _refreshThumb(id);
   }
@@ -558,6 +587,7 @@ class ScanSession extends ChangeNotifier {
         corners: toBridgeCorners(corners),
         filter: toBridgeFilter(page.filter),
         rotationQuarters: 0,
+        strokes: page.strokes.isEmpty ? null : toBridgeStrokeSpecs(page.strokes),
         outPath: out,
         maxLongSide: _thumbLongSide,
         jpegQuality: 80,
@@ -624,4 +654,33 @@ class ScanSession extends ChangeNotifier {
       // Already gone.
     }
   }
+}
+
+/// Strokes of [before] carried over to [after]'s crop and rotation, anchored
+/// to the paper: mapped photo-exact through both quads, widths rescaled to
+/// the new frame's short side, strokes left wholly outside the new frame
+/// dropped. A degenerate quad clears them.
+List<Stroke> strokesAfterEdit(ScanPage before, ScanPage after) {
+  if (before.strokes.isEmpty) return before.strokes;
+  final oldQuad = before.effectiveCorners, newQuad = after.effectiveCorners;
+  if (oldQuad == null || newQuad == null) return before.strokes;
+  bool same = true;
+  for (var i = 0; i < 4; i++) {
+    if ((oldQuad[i] - newQuad[i]).distanceSquared > 1e-9) same = false;
+  }
+  if (same) return before.strokes;
+  double shortSide(List<Offset> q) {
+    final s = quadFrameSize(q);
+    return s.width < s.height ? s.width : s.height;
+  }
+
+  final widthScale = shortSide(oldQuad) / shortSide(newQuad);
+  final out = <Stroke>[];
+  for (final s in before.strokes) {
+    final pts = mapPointsAcrossRecrop(points: s.points, oldQuad: oldQuad, newQuad: newQuad);
+    if (pts == null) return const [];
+    if (pts.every((p) => p.dx < 0 || p.dx > 1 || p.dy < 0 || p.dy > 1)) continue;
+    out.add(Stroke(tool: s.tool, color: s.color, width: s.width * widthScale, points: pts));
+  }
+  return out;
 }

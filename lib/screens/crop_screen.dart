@@ -66,7 +66,16 @@ class _CropScreenState extends State<CropScreen> {
 
   Size get _imageSize => _page.imageSize!;
 
+  bool _warnedStrokes = false;
+
   void _setCorners(List<Offset> c) => setState(() {
+    if (!_warnedStrokes && _page.strokes.isNotEmpty) {
+      _warnedStrokes = true;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(
+            content: Text('Recropping moves the page under your drawing. Your marks follow the paper; marks left outside the new crop are removed.')));
+    }
         _corners = c;
         _previewDirty = true;
       });

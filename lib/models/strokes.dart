@@ -85,6 +85,17 @@ class Stroke {
       'Stroke($tool 0x${color.toRadixString(16)} w=$width pts=${points.length})';
 }
 
+/// Lenient parse of a page's whole `strokes` list: a missing or malformed
+/// key means no strokes, and an element that fails to parse is dropped on
+/// its own instead of breaking the page record.
+List<Stroke> parseStrokes(Object? json) {
+  if (json is! List) return const [];
+  return [
+    for (final s in json)
+      if (Stroke.fromJson(s) case final stroke?) stroke,
+  ];
+}
+
 double _round4(double v) => (v * 10000).round() / 10000;
 
 /// One clockwise quarter-turn of the result frame moves a normalized point
@@ -157,7 +168,29 @@ Size quadFrameSize(List<Offset> quad) {
       h.clamp(1, double.maxFinite).toDouble());
 }
 
-/// Maps stroke points across a recrop, anchored to the photo content: old
+/// Where a point of the result frame sits in the photo itself: pixels of
+/// the image [quad] lies in (the same frame as the corners), after the crop.
+/// The homography is the same one the core's warp solves, with the same
+/// half-pixel bookkeeping, so this inverts the result render exactly —
+/// it is what white-out paper sampling under a stroke uses.
+Offset resultPointIntoPhoto(Offset normalized, List<Offset> quad) {
+  final h = _homography(_homeFrame(quad), quad);
+  final size = quadFrameSize(quad);
+  final inFrame = Offset(normalized.dx * size.width, normalized.dy * size.height);
+  if (h == null) {
+    // Degenerate perspective: fall back to the affine quad map, close
+    // enough for colour sampling.
+    return Offset(
+      quad[0].dx + (quad[1].dx - quad[0].dx) * normalized.dx +
+          (quad[3].dx - quad[0].dx) * normalized.dy,
+      quad[0].dy + (quad[1].dy - quad[0].dy) * normalized.dx +
+          (quad[3].dy - quad[0].dy) * normalized.dy,
+    );
+  }
+  return _applyH(h, inFrame + const Offset(0.5, 0.5)) - const Offset(0.5, 0.5);
+}
+
+/// Maps points across a recrop, anchored to the photo content: old
 /// result -> photo pixels -> new result, both hops via the same 3x3
 /// perspective homographies the core's warp uses (forward plus inverse),
 /// so this is exact rather than approximate. Returns null for a degenerate
