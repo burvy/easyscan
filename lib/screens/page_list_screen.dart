@@ -193,15 +193,22 @@ class _PageTile extends StatelessWidget {
   Widget build(BuildContext context) => ListTile(
         onTap: onTap,
         onLongPress: onLongPress,
-        leading: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: SizedBox(
-            width: 56,
-            height: 72,
-            // Decode small: full 12 MP bitmaps in a list would exhaust memory.
-            child: Image.file(File(page.thumbPath ?? page.originalPath),
-                cacheWidth: 168, fit: BoxFit.contain, gaplessPlayback: true),
+        // Vertical breathing room so neighbouring thumbnails never touch.
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: Container(
+          width: 56,
+          height: 72,
+          clipBehavior: Clip.antiAlias,
+          // Paper-like card: white backing and a hairline border keep pages with
+          // black binarised margins from running into each other.
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
           ),
+          // Decode small: full 12 MP bitmaps in a list would exhaust memory.
+          child: Image.file(File(page.thumbPath ?? page.originalPath),
+              cacheWidth: 168, fit: BoxFit.contain, gaplessPlayback: true),
         ),
         title: Text('Page ${index + 1}'),
         // Dragging starts straight from the handle; it needs no long press.
