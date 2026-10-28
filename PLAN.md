@@ -16,7 +16,7 @@
 
 ## Focus now: G3b polish from burvy's first real scan
 - 016 swipe page row: delete/retake (Haiku), then 020 obvious New scan (Haiku)
-- 017 last-shot thumbnail + count while scanning (OpenCode)
+- 017 last-shot thumbnail + count while scanning: done
 - 018 swipe between pages in viewer + crop (Sonnet), then 019 filter apply-to-all + default (Sonnet)
 
 ## Next groups
