@@ -46,17 +46,22 @@ class EasyScanAds {
 
   void _initializeAds() {
     if (_initialized.value) return;
-    _initialized.value = true;
     // Setting the configuration before initialize() makes sure the very first
     // ad requests are already T-rated for our 13+ audience.
     MobileAds.instance
         .updateRequestConfiguration(
           RequestConfiguration(maxAdContentRating: _maxAdContentRating),
         )
-        .ignore();
+        .then((_) => MobileAds.instance.initialize())
+        .then((status) {
+          debugPrint('[EasyScanAds] MobileAds.initialize complete: $status');
+          // Only now may widgets start loading ads: flipping the notifier
+          // before the SDK is really up made early BannerAd.load() calls hang
+          // silently on device (023 phone pass, 2026-10-28).
+          _initialized.value = true;
+        });
     // Ads init must not be awaited by the UI; late init is harmless and the
     // banner waits for this to flip before it loads anything.
-    MobileAds.instance.initialize();
   }
 
   /// Gathers consent (UMP), then initialises the ad SDK if ads are allowed.
