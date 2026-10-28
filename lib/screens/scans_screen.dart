@@ -17,7 +17,10 @@ class ScansScreen extends StatefulWidget {
 class _ScansScreenState extends State<ScansScreen> {
   late Future<List<ScanSummary>> _scans = widget.session.listScans();
 
-  void _reload() => setState(() => _scans = widget.session.listScans());
+  void _reload() {
+    final scans = widget.session.listScans();
+    setState(() => _scans = scans);
+  }
 
   Future<void> _open(ScanSummary scan) async {
     final nav = Navigator.of(context);
