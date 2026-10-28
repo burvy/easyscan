@@ -10,3 +10,4 @@ One line per decision, with the reason.
 - 2026-10-27 No OpenCV; use `image`/`imageproc`-level crates. Keeps the APK small and the build simple.
 - 2026-10-27 Target audience 13+ (not Families program); keep one AdMob banner with UMP consent, declared in Data safety. App works offline; ads load when online. (burvy, ask 002)
 - 2026-10-27 An agent installs Flutter + Android SDK/NDK on the dev PC. (burvy, ask 002)
+- 2026-10-27 Testing on emulator for dev plus burvy's real Android phone over USB debugging for camera/crop/filter tuning. (burvy, ask 003)
