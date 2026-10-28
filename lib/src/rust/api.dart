@@ -7,35 +7,11 @@ import 'frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `decode`, `encode_jpeg_img`, `encode_png`, `load_oriented`, `rotate_quarters`, `to_filter`, `to_page_size`
+// These functions are ignored because they are not marked as `pub`: `encode_jpeg_img`, `load_oriented`, `rotate_quarters`, `to_filter`, `to_page_size`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `eq`, `fmt`
 
 /// Version of the Rust core, to prove the bridge is wired up.
 String coreVersion() => RustLib.instance.api.crateApiCoreVersion();
-
-/// Deprecated: use [`detect_page_file`] instead — this decodes PNG bytes,
-/// not camera JPEGs, and no EXIF handling.
-Future<PageDetection> detectPage({required List<int> image}) =>
-    RustLib.instance.api.crateApiDetectPage(image: image);
-
-/// Deprecated: use [`process_page_file`] instead — returns PNG bytes.
-/// Flattens the quad (TL, TR, BR, BL).
-Future<Uint8List> warpPage({
-  required List<int> image,
-  required List<Corner> corners,
-}) => RustLib.instance.api.crateApiWarpPage(image: image, corners: corners);
-
-/// Deprecated: part of `process_page_file` now.
-/// Applies a filter and returns a PNG.
-Future<Uint8List> applyFilter({
-  required List<int> image,
-  required ScanFilter filter,
-}) => RustLib.instance.api.crateApiApplyFilter(image: image, filter: filter);
-
-/// Deprecated: use [`export_pdf_file`] instead — PNG bytes in, PDF bytes out.
-/// One PDF from ordered page images (any decodable format).
-Future<Uint8List> exportPdf({required List<Uint8List> pages}) =>
-    RustLib.instance.api.crateApiExportPdf(pages: pages);
 
 /// Oriented apparent size of the image file, without decoding the pixels.
 Future<ImageSize> imageSizeFile({required String path}) =>
@@ -82,8 +58,13 @@ Future<ImageSize> processPageFile({
 );
 
 /// One PDF from ordered page-image paths, written to `out_path`.
-/// Each page is EXIF-oriented before embedding (rotation is baked into how
-/// the page model works — no quarter-turns here).
+///
+/// Fast path: a page that is already an embeddable baseline JPEG (like
+/// everything `process_page_file` writes — no EXIF) is embedded
+/// byte-for-byte, so a 20-page export decodes nothing. Otherwise the page
+/// is decoded (EXIF orientation applied), re-encoded, and embedded — one
+/// page at a time either way, so peak memory is about one bitmap, not one
+/// per page.
 Future<void> exportPdfFile({
   required List<String> pages,
   required String outPath,

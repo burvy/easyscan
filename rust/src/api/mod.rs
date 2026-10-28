@@ -1,17 +1,13 @@
 //! Thin bridge over `easyscan-core`: decode/encode at the edges, no logic.
 //!
-//! Two API generations live here for now (task 010 removes the old one):
-//! the byte-based `*` functions below (PNG/Vec<u8> in and out, from task
-//! 007) are deprecated — 12MP PNG round-trips through FFI are slow and
-//! double memory — but the app still calls them, so they stay compiling.
-//! New code should use the `*_file` functions, which pass file paths and
-//! write JPEGs on disk.
+//! File-path API only: camera JPEG paths in, processed JPEG/PDF files out,
+//! EXIF orientation applied at every decode edge. (The byte-based task 007
+//! API that round-tripped 12MP PNGs through FFI was removed in task 012.)
 
 use easyscan_core::{detect, filter, pdf};
 use image::codecs::jpeg::JpegEncoder;
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
-use std::io::Cursor;
+use image::{DynamicImage, ImageDecoder, ImageReader};
 
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
@@ -58,56 +54,6 @@ pub enum PdfPageSize {
 pub struct ImageSize {
     pub width: u32,
     pub height: u32,
-}
-
-// ---------------------------------------------------------------------------
-// Old byte-based API (deprecated; task 010 removes it once the app is off it).
-// ---------------------------------------------------------------------------
-
-fn decode(bytes: &[u8]) -> Result<DynamicImage, String> {
-    image::load_from_memory(bytes).map_err(|e| e.to_string())
-}
-
-fn encode_png(img: &DynamicImage) -> Result<Vec<u8>, String> {
-    let mut out = Cursor::new(Vec::new());
-    img.write_to(&mut out, ImageFormat::Png).map_err(|e| e.to_string())?;
-    Ok(out.into_inner())
-}
-
-/// Deprecated: use [`detect_page_file`] instead — this decodes PNG bytes,
-/// not camera JPEGs, and no EXIF handling.
-pub fn detect_page(image: Vec<u8>) -> Result<PageDetection, String> {
-    let d = detect::detect_page(&decode(&image)?);
-    Ok(PageDetection {
-        corners: d.quad.0.iter().map(|p| Corner { x: p.x, y: p.y }).collect(),
-        found: d.found,
-        confidence: d.confidence,
-    })
-}
-
-/// Deprecated: use [`process_page_file`] instead — returns PNG bytes.
-/// Flattens the quad (TL, TR, BR, BL).
-pub fn warp_page(image: Vec<u8>, corners: Vec<Corner>) -> Result<Vec<u8>, String> {
-    let [a, b, c, d]: [Corner; 4] = corners.try_into().map_err(|_| "need 4 corners".to_string())?;
-    let pt = |p: Corner| detect::Point { x: p.x, y: p.y };
-    let quad = detect::Quad([pt(a), pt(b), pt(c), pt(d)]);
-    encode_png(&detect::warp(&decode(&image)?, &quad))
-}
-
-/// Deprecated: part of `process_page_file` now.
-/// Applies a filter and returns a PNG.
-pub fn apply_filter(image: Vec<u8>, filter: ScanFilter) -> Result<Vec<u8>, String> {
-    encode_png(&filter::apply(&decode(&image)?, to_filter(filter)))
-}
-
-/// Deprecated: use [`export_pdf_file`] instead — PNG bytes in, PDF bytes out.
-/// One PDF from ordered page images (any decodable format).
-pub fn export_pdf(pages: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
-    if pages.is_empty() {
-        return Err("no pages".into());
-    }
-    let imgs = pages.iter().map(|p| decode(p)).collect::<Result<Vec<_>, _>>()?;
-    Ok(pdf::export_pdf(&imgs, &pdf::PdfOptions::default()))
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +175,13 @@ pub fn process_page_file(
 }
 
 /// One PDF from ordered page-image paths, written to `out_path`.
-/// Each page is EXIF-oriented before embedding (rotation is baked into how
-/// the page model works — no quarter-turns here).
+///
+/// Fast path: a page that is already an embeddable baseline JPEG (like
+/// everything `process_page_file` writes — no EXIF) is embedded
+/// byte-for-byte, so a 20-page export decodes nothing. Otherwise the page
+/// is decoded (EXIF orientation applied), re-encoded, and embedded — one
+/// page at a time either way, so peak memory is about one bitmap, not one
+/// per page.
 pub fn export_pdf_file(
     pages: Vec<String>,
     out_path: String,
@@ -240,14 +191,28 @@ pub fn export_pdf_file(
     if pages.is_empty() {
         return Err("no pages".into());
     }
-    let imgs = pages.iter().map(|p| load_oriented(p)).collect::<Result<Vec<_>, _>>()?;
+    let inputs = pages
+        .iter()
+        .map(|p| -> Result<pdf::PageInput, String> {
+            // One file in memory at a time; the compressed bytes drop as
+            // soon as the page takes them.
+            let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
+            match pdf::Jpeg::new(bytes) {
+                Ok(jpeg) => Ok(pdf::PageInput::Jpeg(jpeg)),
+                Err(reason) => load_oriented(p)
+                    .map(pdf::PageInput::Image)
+                    .map_err(|e| format!("{p}: {reason}; fallback failed: {e}")),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let options = pdf::PdfOptions {
         jpeg_quality: jpeg_quality.clamp(1, 100) as u8,
         page_size: to_page_size(page_size),
         ..pdf::PdfOptions::default()
     };
-    let bytes = pdf::export_pdf(&imgs, &options);
-    std::fs::write(&out_path, bytes).map_err(|e| format!("{out_path}: {e}"))?;
+    let file = std::fs::File::create(&out_path).map_err(|e| format!("{out_path}: {e}"))?;
+    pdf::export_pdf_pages(inputs.into_iter(), &options, &mut std::io::BufWriter::new(file))
+        .map_err(|e| format!("{out_path}: {e}"))?;
     Ok(())
 }
 
@@ -256,6 +221,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::Instant;
+
+    use image::{Rgb, RgbImage};
 
     /// A JPEG bytes + EXIF orientation value -> JPEG bytes with that EXIF
     /// APP1 segment (TIFF header + one Orientation short) injected right
@@ -427,6 +394,74 @@ mod tests {
         assert_eq!(2, s.match_indices("/Type /Page ").count());
         std::fs::remove_file(&src1).unwrap();
         std::fs::remove_file(&src2).unwrap();
+        std::fs::remove_file(&out).unwrap();
+    }
+
+    #[test]
+    fn export_pdf_file_embeds_processed_jpegs_as_is() {
+        // Produce a real processed page (plain JPEG, no EXIF) and export it.
+        let src = temp_file(
+            "easyscan_pass_src.jpg",
+            &{
+                let img = RgbImage::from_fn(60, 40, |x, y| Rgb([(x * 5 + y) as u8, (y * 7) as u8, 90]));
+                let mut jpeg = Vec::new();
+                JpegEncoder::new_with_quality(&mut jpeg, 90)
+                    .encode_image(&DynamicImage::ImageRgb8(img))
+                    .unwrap();
+                jpeg
+            },
+        );
+        let bytes = std::fs::read(&src).unwrap();
+        let out = std::env::temp_dir().join("easyscan_pass.pdf");
+        export_pdf_file(
+            vec![src.display().to_string()],
+            out.display().to_string(),
+            PdfPageSize::A4,
+            80,
+        )
+        .unwrap();
+        let pdf = std::fs::read(&out).unwrap();
+        // A landscape page on A4 rotates the page box...
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(s.contains("/MediaBox [0 0 841.89 595.28]"), "{s}");
+        // ...and the JPEG must be embedded untouched.
+        assert!(
+            pdf.windows(bytes.len()).any(|w| w == bytes.as_slice()),
+            "process_page_file output should pass through without a re-encode"
+        );
+        std::fs::remove_file(&src).unwrap();
+        std::fs::remove_file(&out).unwrap();
+    }
+
+    /// Memory/time for a 20-page export. Hand-run for the report:
+    /// `cargo test -p easyscan_bridge --release export_pdf_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore = "hand-run release bench for size/time numbers"]
+    fn export_pdf_timing_20_pages() {
+        let img = RgbImage::from_fn(4000, 3000, |x, y| {
+            let page = (600..3400).contains(&x) && (300..2700).contains(&y);
+            if page { Rgb([248, 248, 246]) } else { Rgb([70, 70, 70]) }
+        });
+        let src = temp_file(
+            "easyscan_20p_src.jpg",
+            &{
+                let mut jpeg = Vec::new();
+                JpegEncoder::new_with_quality(&mut jpeg, 85)
+                    .encode_image(&DynamicImage::ImageRgb8(img))
+                    .unwrap();
+                jpeg
+            },
+        );
+        let out = std::env::temp_dir().join("easyscan_20p.pdf");
+        let start = Instant::now();
+        let paths: Vec<String> = (0..20).map(|_| src.display().to_string()).collect();
+        export_pdf_file(paths, out.display().to_string(), PdfPageSize::FitToImage, 80).unwrap();
+        let secs = start.elapsed();
+        let pdf_len = std::fs::metadata(&out).unwrap().len();
+        eprintln!(
+            "20 × 12MP JPEG export (pass-through): {pdf_len} bytes in {secs:?} — no page was decoded"
+        );
+        std::fs::remove_file(&src).unwrap();
         std::fs::remove_file(&out).unwrap();
     }
 
