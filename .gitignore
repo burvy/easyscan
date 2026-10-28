@@ -1,0 +1,12 @@
+/target
+
+# desk orchestration workspace (runtime state, not product code)
+/agents/
+/log/
+/locks/
+/asks/
+/tasks/
+/models/
+/presets/
+/prompts/
+/desk.toml
