@@ -35,6 +35,11 @@ class ScanSession extends ChangeNotifier {
   final List<ScanPage> _pages = [];
   int _counter = 0;
 
+  /// Filter given to newly captured pages: the one chosen most recently. Kept
+  /// with the scan (and across New scan, which is the same user habit).
+  PageFilter get defaultFilter => _defaultFilter;
+  PageFilter _defaultFilter = PageFilter.enhance;
+
   List<ScanPage> get pages => List.unmodifiable(_pages);
   int get length => _pages.length;
 
@@ -55,6 +60,10 @@ class ScanSession extends ChangeNotifier {
         final json = jsonDecode(file.readAsStringSync());
         final counter = json['counter'];
         if (counter is int) _counter = counter;
+        final filter = json['defaultFilter'];
+        if (filter is String) {
+          _defaultFilter = PageFilter.values.asNameMap()[filter] ?? _defaultFilter;
+        }
         for (final j in json['pages'] as List) {
           final page = ScanPageJson.fromJson(j, _dir.path, (p) => File(p).existsSync());
           if (page != null) _pages.add(page);
@@ -127,6 +136,7 @@ class ScanSession extends ChangeNotifier {
         final text = jsonEncode({
           'version': 1,
           'counter': _counter,
+          'defaultFilter': _defaultFilter.name,
           'pages': [for (final p in _pages) p.toJson()],
         });
         final tmp = File('${_dir.path}/$_stateFile.tmp');
@@ -155,7 +165,7 @@ class ScanSession extends ChangeNotifier {
   }
 
   Future<void> addPhoto(String capturedPath) async {
-    final page = await _adopt(capturedPath);
+    final page = (await _adopt(capturedPath)).copyWith(filter: _defaultFilter);
     _pages.add(page);
     notifyListeners();
     _prepareInBackground(page.id);
@@ -260,6 +270,25 @@ class ScanSession extends ChangeNotifier {
   /// The whole image as a corner list.
   static List<Offset> fullFrame(Size s) =>
       [Offset.zero, Offset(s.width, 0), Offset(s.width, s.height), Offset(0, s.height)];
+
+  /// Remembers [filter] as the one new pages start with.
+  void setDefaultFilter(PageFilter filter) {
+    if (filter == _defaultFilter) return;
+    _defaultFilter = filter;
+    notifyListeners();
+  }
+
+  /// Gives every page [filter] (crop and rotation stay per page) and makes it
+  /// the default for new pages.
+  void applyFilterToAll(PageFilter filter) {
+    _defaultFilter = filter;
+    for (var i = 0; i < _pages.length; i++) {
+      if (_pages[i].filter == filter) continue;
+      _pages[i] = _pages[i].copyWith(filter: filter);
+      _refreshThumb(_pages[i].id);
+    }
+    notifyListeners();
+  }
 
   /// Stores new crop settings for page [id] and re-renders its thumbnail.
   Future<void> setEdits(String id,

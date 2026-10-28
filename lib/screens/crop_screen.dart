@@ -138,7 +138,17 @@ class _CropScreenState extends State<CropScreen> {
       _filter = f;
       _previewing = true;
     });
+    widget.session.setDefaultFilter(f);
     _render();
+  }
+
+  void _applyFilterToAll() {
+    widget.session.applyFilterToAll(_filter);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text('${_filterLabels[_filter]} applied to all ${widget.session.length} pages.'),
+      ));
   }
 
   void _rotate() {
@@ -317,6 +327,15 @@ class _CropScreenState extends State<CropScreen> {
                   ),
               ]),
             ),
+            if (widget.session.length > 1)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _applyFilterToAll,
+                  icon: const Icon(Icons.done_all),
+                  label: const Text('Apply to all pages'),
+                ),
+              ),
             const SizedBox(height: 4),
             Row(children: [
               _ToolButton(
