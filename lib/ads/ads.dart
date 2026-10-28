@@ -12,8 +12,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
-import 'ad_ids.dart';
-
 /// Maximum ad content rating: the app is 13+, NOT in the Families program.
 /// `tagForUnderAgeOfConsent` is deliberately left at its default (not set).
 final String _maxAdContentRating = MaxAdContentRating.t;
@@ -57,31 +55,8 @@ class EasyScanAds {
         )
         .ignore();
     // Ads init must not be awaited by the UI; late init is harmless and the
-    // ad loader below waits for MobileAds.initialize anyway.
+    // banner waits for this to flip before it loads anything.
     MobileAds.instance.initialize();
-    if (kDebugMode) unawaited(_debugSmokeTest());
-  }
-
-  /// Debug-only double check that consent + IDs really fill a banner request
-  /// (no UI involved); in release this whole method never runs.
-  Future<void> _debugSmokeTest() async {
-    final ad = BannerAd(
-      adUnitId: bannerAdUnitId,
-      size: AdSize.banner,
-      request: const AdRequest(),
-      listener: BannerAdListener(
-        onAdLoaded: (_) => debugPrint('[EasyScanAds] smoke test banner loaded ✓'),
-        onAdFailedToLoad: (_, error) =>
-            debugPrint('[EasyScanAds] smoke test banner FAILED: $error'),
-      ),
-    );
-    await ad.load();
-    // Platform view already released to its listener's owner: the smoke
-    // banner has no UI, so free it well before any screen could show a real ad.
-    Timer(const Duration(seconds: 10), () {
-      ad.dispose();
-      debugPrint('[EasyScanAds] smoke test banner disposed');
-    });
   }
 
   /// Gathers consent (UMP), then initialises the ad SDK if ads are allowed.

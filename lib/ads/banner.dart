@@ -1,12 +1,15 @@
-/// The one banner EasyScan shows: an anchored adaptive banner docked at the
-/// bottom of the page list screen.
+/// The one banner EasyScan shows, docked at the bottom of the page list screen.
 ///
 /// It reserves its own space (never covers content) and collapses to zero
 /// height while there is nothing to show: offline, while ads are not yet
-/// initialised/consented, or when Google fails to fill.
+/// initialised/consented, or when Google fails to fill. On fill, an inline
+/// adaptive banner sized for the screen width is shown, capped at 60dp so it
+/// stays unobtrusive (Google's minimum banner height applies, 50dp).
 ///
-/// One linear bar of code on the owning screen: `bottomNavigationBar: AdBanner()`.
+/// One bar of code on the owning screen: `bottomNavigationBar: const AdBanner()`.
 library;
+
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -23,49 +26,27 @@ class AdBanner extends StatefulWidget {
 }
 
 class _AdBannerState extends State<AdBanner> {
+  /// The unobtrusive ceiling for this app's single banner.
+  static const int _maxHeightDp = 60;
+
   BannerAd? _ad;
-  bool _loaded = false;
+  AdSize? _platformSize;
   ValueListenable<bool>? _initialised;
+  bool _triedLoad = false;
 
   @override
   void initState() {
     super.initState();
+    // No context / MediaQuery use here: mounting the screen happens before
+    // and after ads may already be initialised, so the kick-off lives in
+    // didChangeDependencies (and this listener reacts to late init).
     _initialised = EasyScanAds.instance.initialized..addListener(_setup);
-    _setup();
   }
 
-  void _setup() async {
-    // Ads only exist after consent gathered + MobileAds.initialize; before
-    // that, and in every offline case, staying collapsed is correct.
-    if (!_initialised!.value || _ad != null) return;
-
-    final width = MediaQuery.sizeOf(context).width.truncate();
-    // Adaptive: Google pick a height in 50-150dp, never more than 20% of the
-    // screen. (The older plain-anchored call is deprecated; this large one is
-    // its replacement and still just a bottom banner.)
-    final size = await AdSize.getLargeAnchoredAdaptiveBannerAdSize(width);
-    if (size == null) return;
-
-    final ad = BannerAd(
-      adUnitId: bannerAdUnitId,
-      size: size,
-      request: const AdRequest(),
-      listener: BannerAdListener(
-        onAdLoaded: (_) {
-          if (mounted) setState(() => _loaded = true);
-        },
-        onAdFailedToLoad: (ad, _) {
-          ad.dispose();
-          if (mounted) setState(() => _ad = null); // back to zero height
-        },
-      ),
-    );
-    if (!mounted) {
-      ad.dispose();
-      return;
-    }
-    setState(() => _ad = ad);
-    await ad.load();
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _setup();
   }
 
   @override
@@ -75,15 +56,61 @@ class _AdBannerState extends State<AdBanner> {
     super.dispose();
   }
 
+  void _setup() {
+    // Ads only exist after consent gathered + MobileAds.initialize; before
+    // that, and in every offline case, staying collapsed is correct. One shot
+    // per screen lifetime: no churn on every dependency change (e.g. theme,
+    // text scale), no vendored retry loops poking the ad server.
+    if (_triedLoad || _ad != null || !_initialised!.value) return;
+    _triedLoad = true;
+
+    final width = MediaQuery.sizeOf(context).width.truncate();
+    final ad = BannerAd(
+      // Inline adaptive: Google picks a height between its 50dp floor and
+      // [_maxHeightDp]; the real height is only known after the load.
+      size: AdSize.getInlineAdaptiveBannerAdSize(width, _maxHeightDp),
+      adUnitId: bannerAdUnitId,
+      request: const AdRequest(),
+      listener: BannerAdListener(
+        onAdLoaded: (loadedAd) async {
+          final size = await (loadedAd as BannerAd).getPlatformAdSize();
+          if (!mounted) return;
+          setState(() {
+            _platformSize = size ?? AdSize(width: width, height: _maxHeightDp);
+          });
+        },
+        onAdFailedToLoad: (failedAd, _) {
+          failedAd.dispose();
+          // Collapsed again; the widget stays collapsed for the session.
+          if (mounted) {
+            setState(() {
+              _ad = null;
+              _platformSize = null;
+            });
+          }
+        },
+      ),
+    );
+    if (!mounted) {
+      ad.dispose();
+      return;
+    }
+    setState(() => _ad = ad);
+    unawaited(ad.load());
+  }
+
   @override
   Widget build(BuildContext context) {
-    final ad = _loaded ? _ad : null;
-    if (ad == null) return const SizedBox.shrink();
+    final size = _platformSize;
+    final ad = _ad;
+    // InlineSize has height 0 until the platform reports the real one.
+    if (ad == null || size == null) return const SizedBox.shrink();
     return SafeArea(
       top: false,
+      // bottomNavigationBar reserves this space: nothing on screen is covered.
       child: SizedBox(
-        width: ad.size.width.toDouble(),
-        height: ad.size.height.toDouble(),
+        width: size.width.toDouble(),
+        height: size.height.toDouble(),
         child: AdWidget(ad: ad),
       ),
     );

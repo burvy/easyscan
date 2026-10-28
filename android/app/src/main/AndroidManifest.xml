@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA"/>
-    <!-- Ads (AdMob) load over the network only; the app itself works offline. -->
+    <!-- The ad SDK loads over the network only; the app itself works offline. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="EasyScan"
@@ -29,8 +29,10 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-    <!-- TODO(release): swap with lib/ads/ad_ids.dart for burvy's real AdMob
-         app ID. Test ID from https://developers.google.com/admob/android/test-ads -->
+    <!-- TODO(release): swap with lib/ads/ad_ids.dart (adMobAppId) for burvy's
+         real AdMob app ID. Unlike unit IDs, the app ID is fine (standard) to
+         be real in debug builds too. Current value: Google's test ID from
+         https://developers.google.com/admob/android/test-ads -->
     <meta-data
         android:name="com.google.android.gms.ads.APPLICATION_ID"
         android:value="ca-app-pub-3940256099942544~3347511713"/>
