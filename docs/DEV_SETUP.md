@@ -12,7 +12,7 @@ Everything is user-level (no admin) under `C:\dev`. Installed 2026-10-27.
 | USB driver (`extras;google;usb_driver`) | rev 13 | `C:\dev\android-sdk\extras\google\usb_driver` |
 | Emulator + image | 37.2.12 / `system-images;android-35;google_apis;x86_64` | |
 | AVD | `easyscan_pixel` (pixel_6) | `~\.android\avd` |
-| Java | Temurin JRE 17 (already installed) | `C:\Program Files (x86)\Eclipse Adoptium\jre-17.0.17.10-hotspot` |
+| JDK for Gradle (`flutter config --jdk-dir`) | Temurin 17.0.20 x64, zip from Adoptium | `C:devjdk-17.0.20.1+1` |
 | flutter_rust_bridge_codegen | 2.13.0 (`cargo install flutter_rust_bridge_codegen`) | cargo bin |
 | Rust targets (nightly default toolchain) | aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android | rustup |
 
@@ -47,3 +47,5 @@ The emulator stays as a secondary target once the hypervisor is enabled.
   installed" (Windows Hypervisor Platform off, or virtualization off in BIOS). Enabling WHPX
   needs admin and a reboot. Until then, test on a physical phone with USB debugging.
 - `avdmanager` prints a harmless "Could not load devices.xml" for the system image.
+- Java: the pre-installed JRE 17 is 32-bit (Gradle fails on `-Xmx8G`) and lacks `jlink`, which the Android Gradle plugin needs. Use the full 64-bit JDK above: `flutter config --jdk-dir "C:\dev\jdk-17.0.20.1+1"`.
+- First release build takes ~7 min (Gradle + Rust for 3 ABIs); later ones ~2 min.

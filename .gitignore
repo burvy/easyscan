@@ -10,3 +10,10 @@
 /presets/
 /prompts/
 /desk.toml
+
+# Flutter / IDE
+/.dart_tool/
+/.idea/
+*.iml
+/build/
+/.flutter-plugins-dependencies
