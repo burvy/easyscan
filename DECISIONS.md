@@ -18,3 +18,4 @@ One line per decision, with the reason.
 - 2026-10-28 G3b polish (016-020) goes before G4 ads. (burvy, ask 014)
 - 2026-10-28 Past scans: keep finished scans and allow reopening them for editing (not just a PDF list). Supersedes the one-scan rule from 015. (burvy, ask 014; 021)
 - 2026-10-28 Drawing exists to change answers on a page (cover old writing, write new), burned into the PDF. (burvy, ask 014; 022)
+- 2026-10-28 Scan history: every scan auto-kept in scans/<id>/ (own state.json), no auto-eviction (size shown, manual delete), New scan without confirm. Working copies dropped on switch, rebuilt keeping corners. (021 design, Sonnet)
