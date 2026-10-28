@@ -8,9 +8,9 @@
 - 008 bridge: file-path API + EXIF orientation (OpenCode), running alongside 009
 - 009 camera capture + page list: reorder, retake, delete (Sonnet)
 - 010 crop handles + filter picker (after 008 and 009)
-- 011 export PDF + share (after 008 and 009)
+- 011 export PDF + share: done
 - then tune on real photos: 004 detection on light backgrounds, 005 filter thresholds
-- 013 full-photo view + retake from crop screen (proposed, burvy request)
+- 013 big zoomable page view + original toggle + retake (Haiku)
 
 ## Next groups
 - G4 ads: single AdMob banner + UMP consent (13+ audience).
