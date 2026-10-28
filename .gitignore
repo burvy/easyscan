@@ -20,3 +20,4 @@
 
 # real test photos (private)
 /testdata/photos/
+/android/.kotlin/
