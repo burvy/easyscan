@@ -37,6 +37,21 @@ class PageListScreen extends StatelessWidget {
     });
   }
 
+  Future<void> _confirmNewScan(BuildContext context) async {
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Discard the current scan?'),
+        content: const Text('All pages in this scan will be deleted.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Discard')),
+        ],
+      ),
+    );
+    if (discard == true) session.clear();
+  }
+
   void _openPage(BuildContext context, int index) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => PageViewScreen(session: session, pageId: session.pages[index].id),
@@ -92,6 +107,16 @@ class PageListScreen extends StatelessWidget {
                 TextButton(
                   onPressed: pages.isEmpty ? null : () => showExportDialog(context, session),
                   child: const Text('Export'),
+                ),
+                PopupMenuButton<String>(
+                  onSelected: (_) => _confirmNewScan(context),
+                  itemBuilder: (_) => [
+                    PopupMenuItem<String>(
+                      value: 'new',
+                      enabled: pages.isNotEmpty,
+                      child: const Text('New scan'),
+                    ),
+                  ],
                 ),
               ],
             ),
