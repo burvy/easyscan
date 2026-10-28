@@ -6,6 +6,7 @@ import '../src/rust/api.dart' as bridge;
 import '../state/scan_session.dart';
 import 'camera_screen.dart';
 import 'crop_screen.dart';
+import 'page_swipe.dart';
 
 /// Long side of the rendered result shown here. The working copy is already
 /// this size, so the result is sharp enough to judge focus at pinch zoom.
@@ -41,8 +42,10 @@ class PageViewScreen extends StatefulWidget {
 }
 
 class _PageViewScreenState extends State<PageViewScreen> {
+  late String _pageId = widget.pageId;
   late bool _original = widget.showOriginal;
   late Future<String> _result = _renderResult();
+  final _zoom = TransformationController();
   // Every render this screen made. Kept until dispose: an older one can still
   // be on screen while a newer one is being drawn.
   final List<String> _rendered = [];
@@ -50,8 +53,9 @@ class _PageViewScreenState extends State<PageViewScreen> {
   /// Result from the working copy with the page's current crop, filter and
   /// rotation. Rendered again whenever those may have changed.
   Future<String> _renderResult() async {
-    await widget.session.whenPrepared(widget.pageId);
-    final page = widget.session.pageById(widget.pageId);
+    final id = _pageId;
+    await widget.session.whenPrepared(id);
+    final page = widget.session.pageById(id);
     if (page == null) throw StateError('page was deleted');
     final out = widget.session.scratchPath('${page.id}_view${DateTime.now().microsecondsSinceEpoch}.jpg');
     await bridge.processPageFile(
@@ -76,15 +80,39 @@ class _PageViewScreenState extends State<PageViewScreen> {
     }
   }
 
+  int get _index => widget.session.pages.indexWhere((p) => p.id == _pageId);
+
+  /// Swiping and the arrows are off when this viewer is a detail of the crop
+  /// screen, which stays on its own page.
+  bool get _canPage => !widget.openedFromCrop;
+
+  /// Moves to the next (+1) or previous (-1) page.
+  void _go(int step) {
+    final pages = widget.session.pages;
+    final to = _index + step;
+    if (!_canPage || _index < 0 || to < 0 || to >= pages.length) return;
+    setState(() {
+      _pageId = pages[to].id;
+      _zoom.value = Matrix4.identity();
+      _result = _renderResult();
+    });
+    // Renders of the page just left are not needed again.
+    final stale = List.of(_rendered);
+    _rendered.clear();
+    for (final path in stale) {
+      _evictAndDelete(path);
+    }
+  }
+
   Future<void> _retake() async {
-    final before = widget.session.pageById(widget.pageId);
+    final before = widget.session.pageById(_pageId);
     if (before == null) return;
-    final index = widget.session.pages.indexWhere((p) => p.id == widget.pageId);
+    final index = _index;
     await Navigator.of(context).push<void>(MaterialPageRoute(
       builder: (_) => CameraScreen(session: widget.session, retakeIndex: index),
     ));
     if (!mounted) return;
-    final after = widget.session.pageById(widget.pageId);
+    final after = widget.session.pageById(_pageId);
     if (after != null && after.originalPath != before.originalPath) {
       Navigator.of(context).pop(PageChange.retook);
     }
@@ -99,14 +127,14 @@ class _PageViewScreenState extends State<PageViewScreen> {
       return;
     }
     await Navigator.of(context).push<void>(MaterialPageRoute(
-      builder: (_) => CropScreen(session: widget.session, pageId: widget.pageId),
+      builder: (_) => CropScreen(session: widget.session, pageId: _pageId, onPageChanged: (id) => _pageId = id),
     ));
     if (!mounted) return;
     setState(() => _result = _renderResult());
   }
 
   Future<void> _delete() async {
-    final index = widget.session.pages.indexWhere((p) => p.id == widget.pageId);
+    final index = widget.session.pages.indexWhere((p) => p.id == _pageId);
     if (index < 0) return;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -132,16 +160,40 @@ class _PageViewScreenState extends State<PageViewScreen> {
     for (final path in _rendered) {
       _evictAndDelete(path);
     }
+    _zoom.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final index = widget.session.pages.indexWhere((p) => p.id == widget.pageId);
+    final index = widget.session.pages.indexWhere((p) => p.id == _pageId);
     return Scaffold(
-      appBar: AppBar(title: Text(index < 0 ? 'Page' : 'Page ${index + 1}')),
+      appBar: AppBar(
+        title: Text(index < 0 ? 'Page' : 'Page ${index + 1} of ${widget.session.pages.length}'),
+        actions: [
+          if (_canPage) ...[
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              tooltip: 'Previous page',
+              onPressed: index > 0 ? () => _go(-1) : null,
+            ),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              tooltip: 'Next page',
+              onPressed: index >= 0 && index < widget.session.pages.length - 1 ? () => _go(1) : null,
+            ),
+          ],
+        ],
+      ),
       body: Column(children: [
-        Expanded(child: _original ? _zoomable(_originalPhoto()) : _resultView()),
+        Expanded(
+          child: PageSwipe(
+            // Only when not zoomed in: a zoomed photo is panned, not paged.
+            canSwipe: (_) => _canPage && _zoom.value.getMaxScaleOnAxis() < 1.05,
+            onSwipe: _go,
+            child: _original ? _zoomable(_originalPhoto()) : _resultView(),
+          ),
+        ),
         SafeArea(
           top: false,
           child: Padding(
@@ -192,7 +244,7 @@ class _PageViewScreenState extends State<PageViewScreen> {
       );
 
   Widget _originalPhoto() {
-    final page = widget.session.pageById(widget.pageId);
+    final page = widget.session.pageById(_pageId);
     if (page == null) return const SizedBox.shrink();
     return Image.file(File(page.originalPath), fit: BoxFit.contain, gaplessPlayback: true);
   }
@@ -208,5 +260,5 @@ class _PageViewScreenState extends State<PageViewScreen> {
         },
       );
 
-  Widget _zoomable(Widget image) => InteractiveViewer(maxScale: 6, child: image);
+  Widget _zoomable(Widget image) => InteractiveViewer(transformationController: _zoom, maxScale: 6, child: image);
 }

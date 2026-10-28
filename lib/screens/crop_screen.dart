@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../models/scan_page.dart';
 import '../src/rust/api.dart' as bridge;
 import '../state/scan_session.dart';
+import 'page_swipe.dart';
 import 'page_view_screen.dart';
 
 const _previewLongSide = 1200;
@@ -19,24 +20,29 @@ const _filterLabels = {
 /// Edit one page: drag four handles over the photo to set the crop, and pick
 /// a filter with a processed preview. Edits are saved when the screen closes.
 class CropScreen extends StatefulWidget {
-  const CropScreen({super.key, required this.session, required this.pageId});
+  const CropScreen({super.key, required this.session, required this.pageId, this.onPageChanged});
 
   final ScanSession session;
   final String pageId;
+
+  /// Told when swiping moves the editor to another page, so an opener that
+  /// shows a page itself can follow.
+  final ValueChanged<String>? onPageChanged;
 
   @override
   State<CropScreen> createState() => _CropScreenState();
 }
 
 class _CropScreenState extends State<CropScreen> {
-  late Future<void> _ready = widget.session.whenPrepared(widget.pageId);
+  late String _pageId = widget.pageId;
+  late Future<void> _ready = widget.session.whenPrepared(_pageId);
 
   // Working state, valid once _ready has completed.
   late ScanPage _page;
   late List<Offset> _corners;
   late PageFilter _filter;
   late int _rotation;
-  late final List<Offset> _initialCorners;
+  late List<Offset> _initialCorners;
   // The photo this screen opened on; if it has been retaken, edits are stale.
   String? _openedPhoto;
 
@@ -50,7 +56,7 @@ class _CropScreenState extends State<CropScreen> {
   void _load() {
     if (_loaded) return;
     _loaded = true;
-    _page = widget.session.pageById(widget.pageId)!;
+    _page = widget.session.pageById(_pageId)!;
     _openedPhoto = _page.originalPath;
     _corners = List.of(_page.corners!);
     _initialCorners = List.of(_corners);
@@ -151,7 +157,7 @@ class _CropScreenState extends State<CropScreen> {
     final change = await Navigator.of(context).push<PageChange>(MaterialPageRoute(
       builder: (_) => PageViewScreen(
         session: widget.session,
-        pageId: widget.pageId,
+        pageId: _pageId,
         showOriginal: true,
         openedFromCrop: true,
       ),
@@ -160,7 +166,7 @@ class _CropScreenState extends State<CropScreen> {
     switch (change) {
       case PageChange.retook:
         Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
-          builder: (_) => CropScreen(session: widget.session, pageId: widget.pageId),
+          builder: (_) => CropScreen(session: widget.session, pageId: _pageId, onPageChanged: widget.onPageChanged),
         ));
       case PageChange.deleted:
         Navigator.of(context).pop();
@@ -171,7 +177,7 @@ class _CropScreenState extends State<CropScreen> {
 
   void _commit() {
     // A retaken page has new corners of its own; do not write these over them.
-    final retaken = widget.session.pageById(widget.pageId)?.originalPath != _openedPhoto;
+    final retaken = widget.session.pageById(_pageId)?.originalPath != _openedPhoto;
     // Crossed handles would warp to garbage, so keep the last good crop.
     if (!retaken) {
       widget.session.setEdits(
@@ -188,6 +194,27 @@ class _CropScreenState extends State<CropScreen> {
     }
   }
 
+  int get _index => widget.session.pages.indexWhere((p) => p.id == _pageId);
+
+  /// Saves this page's edits, then edits the next (+1) or previous (-1) page.
+  void _go(int step) {
+    final pages = widget.session.pages;
+    final to = _index + step;
+    if (!_loaded || _index < 0 || to < 0 || to >= pages.length) return;
+    _commit();
+    final id = pages[to].id;
+    setState(() {
+      _pageId = id;
+      _loaded = false;
+      _previewing = false;
+      _previewDirty = true;
+      _previewPath = null;
+      _rendering = false;
+      _ready = widget.session.whenPrepared(id);
+    });
+    widget.onPageChanged?.call(id);
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<void>(
         future: _ready,
@@ -198,7 +225,7 @@ class _CropScreenState extends State<CropScreen> {
               body: const Center(child: CircularProgressIndicator()),
             );
           }
-          if (snap.hasError || widget.session.pageById(widget.pageId)?.isPrepared != true) {
+          if (snap.hasError || widget.session.pageById(_pageId)?.isPrepared != true) {
             return Scaffold(
               appBar: AppBar(title: const Text('Crop & filter')),
               body: Center(
@@ -206,7 +233,7 @@ class _CropScreenState extends State<CropScreen> {
                   const Text('This photo could not be processed.'),
                   const SizedBox(height: 12),
                   FilledButton(
-                    onPressed: () => setState(() => _ready = widget.session.whenPrepared(widget.pageId)),
+                    onPressed: () => setState(() => _ready = widget.session.whenPrepared(_pageId)),
                     child: const Text('Try again'),
                   ),
                 ]),
@@ -224,8 +251,18 @@ class _CropScreenState extends State<CropScreen> {
         },
         child: Scaffold(
           appBar: AppBar(
-            title: const Text('Crop & filter'),
+            title: Text('Page ${_index + 1} of ${widget.session.pages.length}'),
             actions: [
+              IconButton(
+                icon: const Icon(Icons.chevron_left),
+                tooltip: 'Previous page',
+                onPressed: _index > 0 ? () => _go(-1) : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.chevron_right),
+                tooltip: 'Next page',
+                onPressed: _index >= 0 && _index < widget.session.pages.length - 1 ? () => _go(1) : null,
+              ),
               IconButton(
                 icon: const Icon(Icons.photo_outlined),
                 tooltip: 'Full photo',
@@ -235,7 +272,9 @@ class _CropScreenState extends State<CropScreen> {
             ],
           ),
           body: Column(children: [
-            Expanded(child: _previewing ? _buildPreview() : _buildCrop()),
+            Expanded(
+              child: _previewing ? PageSwipe(onSwipe: _go, child: _buildPreview()) : _buildCrop(),
+            ),
             _buildControls(context),
           ]),
         ),
@@ -247,6 +286,7 @@ class _CropScreenState extends State<CropScreen> {
         corners: _corners,
         valid: _cropValid,
         onChanged: _setCorners,
+        onSwipe: _go,
       );
 
   Widget _buildPreview() => Stack(alignment: Alignment.center, children: [
@@ -348,6 +388,7 @@ class CropEditor extends StatefulWidget {
     required this.corners,
     required this.valid,
     required this.onChanged,
+    required this.onSwipe,
   });
 
   final String imagePath;
@@ -355,6 +396,9 @@ class CropEditor extends StatefulWidget {
   final List<Offset> corners;
   final bool valid;
   final ValueChanged<List<Offset>> onChanged;
+
+  /// A sideways swipe that did not start on a handle: +1 next, -1 previous page.
+  final ValueChanged<int> onSwipe;
 
   @override
   State<CropEditor> createState() => _CropEditorState();
@@ -366,6 +410,8 @@ class _CropEditorState extends State<CropEditor> {
   static const _loupeSize = 110.0;
 
   int? _active;
+  // A handle was picked up during the current gesture.
+  bool _grabbed = false;
   Offset _grabShift = Offset.zero;
 
   @override
@@ -394,6 +440,7 @@ class _CropEditorState extends State<CropEditor> {
           }
           setState(() {
             _active = best;
+            if (best != null) _grabbed = true;
             if (best != null) _grabShift = pts[best] - at;
           });
         }
@@ -406,7 +453,16 @@ class _CropEditorState extends State<CropEditor> {
           widget.onChanged(next);
         }
 
-        return GestureDetector(
+        return PageSwipe(
+          // A finger that goes down near a handle drags it; it never swipes.
+          canSwipe: (at) {
+            _grabbed = false;
+            return pts.every((p) => (p - at).distance >= _grabRadius);
+          },
+          onSwipe: (step) {
+            if (!_grabbed) widget.onSwipe(step);
+          },
+          child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanStart: (d) => start(d.localPosition),
           onPanUpdate: (d) => move(d.localPosition),
@@ -428,6 +484,7 @@ class _CropEditorState extends State<CropEditor> {
             ),
             if (_active != null) _loupe(pts[_active!], box.biggest),
           ]),
+          ),
         );
       });
 
